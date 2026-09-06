@@ -363,12 +363,25 @@ app.get('/api/config', (_req, res) => {
 app.post('/api/checkout', async (req, res) => {
   try {
     const { items, total } = await normalizeCart(req.body.cart);
+
+    const rawLanguage = String(req.body.language || '').toLowerCase();
+
+    const language = ['he', 'en', 'ru'].includes(rawLanguage)
+      ? rawLanguage
+      : 'he';
+
+    
     const customer = normalizeCustomer(req.body.customer);
     const order = {
-      id: newOrderId(), items, total, customer,
-      status: 'awaiting_payment',
-      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
-    };
+  id: newOrderId(),
+  items,
+  total,
+  customer,
+  language,
+  status: 'awaiting_payment',
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString()
+};
     await saveOrder(order);
 
     // Send a useful pending notification too; a second message is sent after confirmed payment.
@@ -417,11 +430,103 @@ app.get('/payment/cancel', (req, res) => res.redirect(`/?payment=cancel&order=${
 
 app.get('/demo-payment', async (req, res) => {
   if (!DEMO_PAYMENT) return res.status(404).send('Not found');
+
   const orderId = cleanText(req.query.order, 100);
   const orders = await readOrders();
   const order = orders.find(o => o.id === orderId);
+
   if (!order) return res.status(404).send('Order not found');
-  res.type('html').send(`<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Demo payment</title><style>body{font-family:system-ui;background:#f7f1ec;color:#29231f;display:grid;place-items:center;min-height:100vh;margin:0}.box{width:min(420px,90vw);background:white;padding:32px;border-radius:28px;box-shadow:0 20px 60px #0001}button{width:100%;padding:15px;border:0;border-radius:999px;background:#29231f;color:white;font-weight:700;cursor:pointer}small{opacity:.6}</style><div class="box"><small>DEMO MODE · карта не списывается</small><h1>Оплата ₪${order.total}</h1><p>Заказ ${order.id}</p><form method="post" action="/api/demo-payment/confirm"><input type="hidden" name="order" value="${order.id}"><button>Имитировать успешную оплату</button></form></div></html>`);
+
+  const rawLang = String(order.language || '').toLowerCase();
+
+const lang = ['he', 'en', 'ru'].includes(rawLang)
+  ? rawLang
+  : 'he';
+
+  const translations = {
+    he: {
+      demo: 'מצב הדגמה · הכרטיס אינו מחויב',
+      payment: 'תשלום',
+      order: 'הזמנה',
+      button: 'הדמיית תשלום מוצלח'
+    },
+
+    en: {
+      demo: 'DEMO MODE · card will not be charged',
+      payment: 'Payment',
+      order: 'Order',
+      button: 'Simulate successful payment'
+    },
+
+    ru: {
+      demo: 'DEMO MODE · карта не списывается',
+      payment: 'Оплата',
+      order: 'Заказ',
+      button: 'Имитировать успешную оплату'
+    }
+  };
+
+  const t = translations[lang];
+  const dir = lang === 'he' ? 'rtl' : 'ltr';
+
+  res.type('html').send(`
+    <!doctype html>
+    <html lang="${lang}" dir="${dir}">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width,initial-scale=1">
+        <title>${t.payment}</title>
+
+        <style>
+          body{
+            font-family:system-ui;
+            background:#f7f1ec;
+            color:#29231f;
+            display:grid;
+            place-items:center;
+            min-height:100vh;
+            margin:0;
+          }
+
+          .box{
+            width:min(420px,90vw);
+            background:white;
+            padding:32px;
+            border-radius:28px;
+            box-shadow:0 20px 60px #0001;
+          }
+
+          button{
+            width:100%;
+            padding:15px;
+            border:0;
+            border-radius:999px;
+            background:#29231f;
+            color:white;
+            font-weight:700;
+            cursor:pointer;
+          }
+
+          small{
+            opacity:.6;
+          }
+        </style>
+      </head>
+
+      <body>
+        <div class="box">
+          <small>${t.demo}</small>
+          <h1>${t.payment} ₪${order.total}</h1>
+          <p>${t.order} ${order.id}</p>
+
+          <form method="post" action="/api/demo-payment/confirm">
+            <input type="hidden" name="order" value="${order.id}">
+            <button>${t.button}</button>
+          </form>
+        </div>
+      </body>
+    </html>
+  `);
 });
 app.post('/api/demo-payment/confirm', async (req, res) => {
   if (!DEMO_PAYMENT) return res.status(404).send('Not found');
