@@ -465,12 +465,35 @@ function formatIsraelDate(iso) {
     }).format(new Date(iso));
   } catch { return iso || ''; }
 }
+
 function orderStatusLabel(status) {
   return ({
-    awaiting_payment: 'Ожидает оплату', paid: 'Оплачен', payment_failed: 'Оплата не прошла',
+    awaiting_payment: 'Ожидает оплату',
+    paid: 'Оплачен',
+    preparing: 'В работе',
+    ready: 'Готов',
+    delivered: 'Доставлен',
+    cancelled: 'Отменён',
+    payment_failed: 'Оплата не прошла',
     payment_configuration_error: 'Оплата не настроена'
   })[status] || status;
 }
+
+function formatAdminDate(iso) {
+  try {
+    return new Intl.DateTimeFormat('ru-RU', {
+      timeZone: 'Asia/Jerusalem',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(new Date(iso));
+  } catch {
+    return iso || '';
+  }
+}
+
 function formatOrderMessage(order, title = '🌸 Новый заказ TATI Flowers') {
   const lines = order.items.map((i, index) => `${index + 1}. ${i.name}\n   ${i.quantity} × ₪${formatMoney(i.price)} = ₪${formatMoney(i.lineTotal)}`);
   return [
@@ -760,6 +783,37 @@ app.post('/api/contact', async (req, res) => {
   }
 });
 
+app.post('/admin/orders/:id/status', adminAuth, async (req, res) => {
+  try {
+    const orderId = cleanText(req.params.id, 100);
+    const status = cleanText(req.body.status, 40);
+
+    const allowedStatuses = [
+      'awaiting_payment',
+      'paid',
+      'preparing',
+      'ready',
+      'delivered',
+      'cancelled'
+    ];
+
+    if (!allowedStatuses.includes(status)) {
+      return res.status(400).send('Invalid status');
+    }
+
+    const order = await updateOrder(orderId, { status });
+
+    if (!order) {
+      return res.status(404).send('Order not found');
+    }
+
+    res.redirect('/admin');
+  } catch (error) {
+    console.error('Admin status update error:', error);
+    res.status(500).send('Не удалось изменить статус');
+  }
+});
+
 app.get('/admin', adminAuth, async (req, res) => {
   try {
     const orders = await readOrders();
@@ -786,7 +840,7 @@ app.get('/admin', adminAuth, async (req, res) => {
           <div class="order-head">
             <div>
               <strong>${escapeHtml(order.id)}</strong>
-              <div class="muted">${escapeHtml(order.createdAt || '')}</div>
+              <div class="muted">${escapeHtml(formatAdminDate(order.createdAt))}</div>
             </div>
 
             <div class="total">
@@ -794,9 +848,21 @@ app.get('/admin', adminAuth, async (req, res) => {
             </div>
           </div>
 
-          <div class="status">
-            ${escapeHtml(order.status)}
+          <div class="status status-${escapeHtml(order.status)}">
+            ${escapeHtml(orderStatusLabel(order.status))}
           </div>
+
+          <form
+  class="status-form"
+  method="post"
+  action="/admin/orders/${encodeURIComponent(order.id)}/status"
+>
+  <button name="status" value="paid">Оплачен</button>
+  <button name="status" value="preparing">В работе</button>
+  <button name="status" value="ready">Готов</button>
+  <button name="status" value="delivered">Доставлен</button>
+  <button name="status" value="cancelled">Отменён</button>
+</form>
 
           <div class="grid">
             <div>
@@ -947,6 +1013,58 @@ app.get('/admin', adminAuth, async (req, res) => {
               font-weight: 700;
             }
 
+            .status-paid {
+  background: #e7f5ea;
+}
+
+.status-awaiting_payment {
+  background: #f6eadf;
+}
+
+.status-payment_failed,
+.status-payment_configuration_error {
+  background: #f8dddd;
+}
+
+.status-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0 0 20px;
+}
+
+.status-form button {
+  border: 1px solid #e5ddd7;
+  background: white;
+  color: #29231f;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: .2s ease;
+}
+
+.status-form button:hover {
+  background: #f4e7e4;
+  transform: translateY(-1px);
+}
+
+.status-preparing {
+  background: #fff1cc;
+}
+
+.status-ready {
+  background: #e3edf8;
+}
+
+.status-delivered {
+  background: #e3f3e7;
+}
+
+.status-cancelled {
+  background: #eee;
+}
+
             .grid {
               display: grid;
               grid-template-columns: repeat(3, 1fr);
@@ -975,6 +1093,34 @@ app.get('/admin', adminAuth, async (req, res) => {
               cursor: pointer;
               font-weight: 700;
             }
+
+            summary {
+  cursor: pointer;
+  font-weight: 700;
+  list-style: none;
+  outline: none;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
+
+summary:focus,
+summary:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+summary::before {
+  content: '›';
+  display: inline-block;
+  margin-right: 8px;
+  transition: transform .2s ease;
+}
+
+details[open] summary::before {
+  transform: rotate(90deg);
+}
 
             .details {
               margin-top: 18px;
