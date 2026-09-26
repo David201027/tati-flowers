@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
+import pg from 'pg';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,6 +15,13 @@ const PORT = Number(process.env.PORT || 3000);
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
 const ORDERS_FILE = path.join(__dirname, 'data', 'orders.json');
 const DEMO_PAYMENT = String(process.env.DEMO_PAYMENT || '').toLowerCase() === 'true';
+const { Pool } = pg;
+
+const pool = process.env.DATABASE_URL
+  ? new Pool({
+      connectionString: process.env.DATABASE_URL
+    })
+  : null;
 
 const FALLBACK_PRODUCTS = [
   { id:'blush', name:'Blush', price:220, category:'love', description:'Пудровые сезонные цветы', image:'https://images.unsplash.com/photo-1561181286-d3fee7d55364?auto=format&fit=crop&w=900&q=82', active:true, sort:10 },
@@ -188,28 +196,173 @@ function isValidEmail(value) {
 function newOrderId() {
   return `TATI-${new Date().toISOString().slice(0,10).replaceAll('-', '')}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 }
-async function readOrders() {
-  try { return JSON.parse(await fs.readFile(ORDERS_FILE, 'utf8')); }
-  catch { return []; }
+async function initDatabase() {
+  if (!pool) {
+    console.log('PostgreSQL: DATABASE_URL отсутствует, используется локальный orders.json');
+    return;
+  }
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id TEXT PRIMARY KEY,
+      items JSONB NOT NULL,
+      total NUMERIC(10,2) NOT NULL,
+      customer JSONB NOT NULL,
+      language TEXT DEFAULT 'he',
+      status TEXT NOT NULL,
+      payment_provider TEXT,
+      payment_callback JSONB,
+      payplus_page_request_uid TEXT,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    )
+  `);
+
+  console.log('PostgreSQL: orders table ready');
 }
+
+async function readOrders() {
+  if (!pool) {
+    try {
+      return JSON.parse(await fs.readFile(ORDERS_FILE, 'utf8'));
+    } catch {
+      return [];
+    }
+  }
+
+  const result = await pool.query(`
+    SELECT
+      id,
+      items,
+      total,
+      customer,
+      language,
+      status,
+      payment_provider AS "paymentProvider",
+      payment_callback AS "paymentCallback",
+      payplus_page_request_uid AS "payPlusPageRequestUid",
+      created_at AS "createdAt",
+      updated_at AS "updatedAt"
+    FROM orders
+    ORDER BY created_at DESC
+  `);
+
+  return result.rows.map(order => ({
+    ...order,
+    total: Number(order.total)
+  }));
+}
+
 async function writeOrders(orders) {
+  if (pool) return;
+
   await fs.mkdir(path.dirname(ORDERS_FILE), { recursive: true });
+
   const tmp = `${ORDERS_FILE}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(orders, null, 2));
+
+  await fs.writeFile(
+    tmp,
+    JSON.stringify(orders, null, 2)
+  );
+
   await fs.rename(tmp, ORDERS_FILE);
 }
+
 async function saveOrder(order) {
-  const orders = await readOrders();
-  orders.unshift(order);
-  await writeOrders(orders.slice(0, 5000));
+  if (!pool) {
+    const orders = await readOrders();
+    orders.unshift(order);
+    await writeOrders(orders.slice(0, 5000));
+    return order;
+  }
+
+  await pool.query(`
+    INSERT INTO orders (
+      id,
+      items,
+      total,
+      customer,
+      language,
+      status,
+      created_at,
+      updated_at
+    )
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+  `, [
+    order.id,
+    JSON.stringify(order.items),
+    order.total,
+    JSON.stringify(order.customer),
+    order.language || 'he',
+    order.status,
+    order.createdAt,
+    order.updatedAt
+  ]);
+
+  return order;
 }
+
 async function updateOrder(orderId, patch) {
+  if (!pool) {
+    const orders = await readOrders();
+    const index = orders.findIndex(o => o.id === orderId);
+
+    if (index < 0) return null;
+
+    orders[index] = {
+      ...orders[index],
+      ...patch,
+      updatedAt: new Date().toISOString()
+    };
+
+    await writeOrders(orders);
+
+    return orders[index];
+  }
+
+  const current = await pool.query(
+    `SELECT * FROM orders WHERE id = $1`,
+    [orderId]
+  );
+
+  if (!current.rows.length) return null;
+
+  const old = current.rows[0];
+
+  const updated = {
+    status: patch.status ?? old.status,
+    paymentProvider:
+      patch.paymentProvider ?? old.payment_provider,
+    paymentCallback:
+      patch.paymentCallback ?? old.payment_callback,
+    payPlusPageRequestUid:
+      patch.payPlusPageRequestUid ?? old.payplus_page_request_uid,
+    updatedAt: new Date().toISOString()
+  };
+
+  await pool.query(`
+    UPDATE orders
+    SET
+      status = $2,
+      payment_provider = $3,
+      payment_callback = $4,
+      payplus_page_request_uid = $5,
+      updated_at = $6
+    WHERE id = $1
+  `, [
+    orderId,
+    updated.status,
+    updated.paymentProvider,
+    updated.paymentCallback
+      ? JSON.stringify(updated.paymentCallback)
+      : null,
+    updated.payPlusPageRequestUid,
+    updated.updatedAt
+  ]);
+
   const orders = await readOrders();
-  const index = orders.findIndex(o => o.id === orderId);
-  if (index < 0) return null;
-  orders[index] = { ...orders[index], ...patch, updatedAt: new Date().toISOString() };
-  await writeOrders(orders);
-  return orders[index];
+
+  return orders.find(order => order.id === orderId) || null;
 }
 async function normalizeCart(rawCart) {
   if (!Array.isArray(rawCart) || rawCart.length === 0 || rawCart.length > 30) throw new Error('Корзина пуста');
@@ -550,4 +703,17 @@ app.post('/api/contact', async (req, res) => {
 });
 
 app.get('*splat', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-app.listen(PORT, () => console.log(`TATI Flowers: ${PUBLIC_BASE_URL}`));
+async function startServer() {
+  try {
+    await initDatabase();
+
+    app.listen(PORT, () => {
+      console.log(`TATI Flowers: ${PUBLIC_BASE_URL}`);
+    });
+  } catch (error) {
+    console.error('Database initialization failed:', error);
+    process.exit(1);
+  }
+}
+
+startServer();
