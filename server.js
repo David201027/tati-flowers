@@ -186,6 +186,64 @@ app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] })
 function cleanText(value, max = 300) {
   return String(value ?? '').replace(/[<>]/g, '').trim().slice(0, max);
 }
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function secureCompare(a, b) {
+  const hashA = crypto.createHash('sha256').update(String(a)).digest();
+  const hashB = crypto.createHash('sha256').update(String(b)).digest();
+
+  return crypto.timingSafeEqual(hashA, hashB);
+}
+
+function adminAuth(req, res, next) {
+  const adminUser = String(process.env.ADMIN_USER || '');
+  const adminPassword = String(process.env.ADMIN_PASSWORD || '');
+
+  if (!adminUser || !adminPassword) {
+    return res.status(503).send('Admin panel is not configured');
+  }
+
+  const auth = String(req.headers.authorization || '');
+
+  if (!auth.startsWith('Basic ')) {
+    res.set('WWW-Authenticate', 'Basic realm="TATI Flowers Admin"');
+    return res.status(401).send('Authorization required');
+  }
+
+  let decoded = '';
+
+  try {
+    decoded = Buffer.from(auth.slice(6), 'base64').toString('utf8');
+  } catch {
+    return res.status(401).send('Invalid authorization');
+  }
+
+  const separator = decoded.indexOf(':');
+
+  if (separator < 0) {
+    return res.status(401).send('Invalid authorization');
+  }
+
+  const username = decoded.slice(0, separator);
+  const password = decoded.slice(separator + 1);
+
+  if (
+    !secureCompare(username, adminUser) ||
+    !secureCompare(password, adminPassword)
+  ) {
+    res.set('WWW-Authenticate', 'Basic realm="TATI Flowers Admin"');
+    return res.status(401).send('Wrong login or password');
+  }
+
+  next();
+}
 function isValidPhone(value) {
   return /^[+\d][\d\s()\-]{7,19}$/.test(String(value || '').trim());
 }
@@ -702,7 +760,283 @@ app.post('/api/contact', async (req, res) => {
   }
 });
 
+app.get('/admin', adminAuth, async (req, res) => {
+  try {
+    const orders = await readOrders();
+
+    res.set('Cache-Control', 'no-store');
+    res.set('X-Robots-Tag', 'noindex, nofollow');
+
+    const rows = orders.map(order => {
+      const customer = order.customer || {};
+      const items = Array.isArray(order.items) ? order.items : [];
+
+      const itemsHtml = items.map(item => `
+        <div class="item">
+          <strong>${escapeHtml(item.name)}</strong>
+          <span>
+            ${escapeHtml(item.quantity)} × ₪${escapeHtml(item.price)}
+            = ₪${escapeHtml(item.lineTotal)}
+          </span>
+        </div>
+      `).join('');
+
+      return `
+        <article class="order">
+          <div class="order-head">
+            <div>
+              <strong>${escapeHtml(order.id)}</strong>
+              <div class="muted">${escapeHtml(order.createdAt || '')}</div>
+            </div>
+
+            <div class="total">
+              ₪${escapeHtml(order.total)}
+            </div>
+          </div>
+
+          <div class="status">
+            ${escapeHtml(order.status)}
+          </div>
+
+          <div class="grid">
+            <div>
+              <span class="label">Клиент</span>
+              <strong>${escapeHtml(customer.name)}</strong>
+            </div>
+
+            <div>
+              <span class="label">Телефон</span>
+              <a href="tel:${escapeHtml(customer.phone)}">
+                ${escapeHtml(customer.phone)}
+              </a>
+            </div>
+
+            <div>
+              <span class="label">Город</span>
+              ${escapeHtml(customer.city)}
+            </div>
+
+            <div>
+              <span class="label">Дата доставки</span>
+              ${escapeHtml(customer.deliveryDate || '—')}
+            </div>
+
+            <div>
+              <span class="label">Язык</span>
+              ${escapeHtml(order.language || '—')}
+            </div>
+
+            <div>
+              <span class="label">Оплата</span>
+              ${escapeHtml(order.paymentProvider || '—')}
+            </div>
+          </div>
+
+          <details>
+            <summary>Подробнее</summary>
+
+            <div class="details">
+              <h3>Состав заказа</h3>
+
+              ${itemsHtml || '<p>Нет товаров</p>'}
+
+              <h3>Доставка</h3>
+
+              <p>
+                ${escapeHtml(customer.city)},
+                ${escapeHtml(customer.address)}
+              </p>
+
+              <p>
+                Время:
+                ${escapeHtml(customer.deliveryTime || '—')}
+              </p>
+
+              ${
+                customer.email
+                  ? `<p>Email: ${escapeHtml(customer.email)}</p>`
+                  : ''
+              }
+
+              ${
+                customer.note
+                  ? `<p>Комментарий: ${escapeHtml(customer.note)}</p>`
+                  : ''
+              }
+            </div>
+          </details>
+        </article>
+      `;
+    }).join('');
+
+    res.type('html').send(`
+      <!doctype html>
+
+      <html lang="ru">
+        <head>
+          <meta charset="utf-8">
+
+          <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1"
+          >
+
+          <meta name="robots" content="noindex,nofollow">
+
+          <title>TATI Flowers — Заказы</title>
+
+          <style>
+            * {
+              box-sizing: border-box;
+            }
+
+            body {
+              margin: 0;
+              background: #f6f1ed;
+              color: #29231f;
+              font-family: Arial, sans-serif;
+            }
+
+            main {
+              width: min(1000px, calc(100% - 32px));
+              margin: 40px auto;
+            }
+
+            h1 {
+              margin-bottom: 8px;
+            }
+
+            .subtitle {
+              margin-bottom: 30px;
+              opacity: .6;
+            }
+
+            .order {
+              background: white;
+              border-radius: 22px;
+              padding: 22px;
+              margin-bottom: 18px;
+              box-shadow: 0 10px 35px rgba(0,0,0,.05);
+            }
+
+            .order-head {
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 20px;
+            }
+
+            .total {
+              font-size: 22px;
+              font-weight: 700;
+            }
+
+            .muted {
+              margin-top: 5px;
+              font-size: 13px;
+              opacity: .5;
+            }
+
+            .status {
+              display: inline-block;
+              margin: 15px 0;
+              padding: 7px 12px;
+              border-radius: 100px;
+              background: #f1e3df;
+              font-size: 12px;
+              font-weight: 700;
+            }
+
+            .grid {
+              display: grid;
+              grid-template-columns: repeat(3, 1fr);
+              gap: 18px;
+              margin: 15px 0 20px;
+            }
+
+            .label {
+              display: block;
+              margin-bottom: 5px;
+              font-size: 11px;
+              text-transform: uppercase;
+              opacity: .5;
+            }
+
+            a {
+              color: inherit;
+            }
+
+            details {
+              border-top: 1px solid #eee;
+              padding-top: 15px;
+            }
+
+            summary {
+              cursor: pointer;
+              font-weight: 700;
+            }
+
+            .details {
+              margin-top: 18px;
+            }
+
+            .item {
+              display: flex;
+              justify-content: space-between;
+              gap: 15px;
+              padding: 8px 0;
+              border-bottom: 1px solid #eee;
+            }
+
+            @media (max-width: 700px) {
+              main {
+                margin-top: 20px;
+              }
+
+              .grid {
+                grid-template-columns: 1fr 1fr;
+              }
+
+              .order-head {
+                align-items: flex-start;
+              }
+            }
+
+            @media (max-width: 450px) {
+              .grid {
+                grid-template-columns: 1fr;
+              }
+
+              .order {
+                padding: 18px;
+              }
+            }
+          </style>
+        </head>
+
+        <body>
+          <main>
+            <h1>TATI Flowers</h1>
+
+            <div class="subtitle">
+              Заказы: ${orders.length}
+            </div>
+
+            ${rows || '<p>Пока нет заказов.</p>'}
+          </main>
+        </body>
+      </html>
+    `);
+
+  } catch (error) {
+    console.error('Admin orders error:', error);
+
+    res.status(500).send('Не удалось загрузить заказы');
+  }
+});
+
 app.get('*splat', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+
 async function startServer() {
   try {
     await initDatabase();
