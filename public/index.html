@@ -17,6 +17,8 @@
     content="זרים בעיצוב אישי, פרחים לחתונות, עיצוב אירועים ומשלוחי פרחים תל אביב ובמרכז הארץ.">
   <meta property="og:url" content="https://tatiflowers.co.il/">
   <meta property="og:type" content="website">
+  <meta property="og:image" content="https://tatiflowers.co.il/tati-favicon.png">
+<meta property="og:image:type" content="image/jpeg">
 
   <script type="application/ld+json">
   {
@@ -42,16 +44,28 @@
     <button class="menu-btn" aria-label="תפריט" aria-expanded="false"><span></span><span></span></button>
     <nav class="nav">
       <a href="#catalog" data-i18n="navBouquets">זרי פרחים</a>
-      <a href="#events" data-i18n="navEvents">חתונות ואירועים</a>
       <a href="#workshops" data-i18n="navWorkshops">סדנאות</a>
       <a href="#about" data-i18n="navAbout">עלינו</a>
       <a href="#contact" data-i18n="navContact">יצירת קשר</a>
     </nav>
 
-    <div class="language-switcher" role="group" aria-label="Language">
-      <button type="button" data-lang="he" class="active" aria-label="עברית">עב</button>
-      <button type="button" data-lang="en" aria-label="English">EN</button>
-      <button type="button" data-lang="ru" aria-label="Русский">RU</button>
+    <div class="language-dropdown" id="languageDropdown">
+      <button class="language-current" id="languageCurrent" type="button" aria-expanded="false" aria-haspopup="true">
+        <span id="currentLanguageLabel">עב</span>
+        <span class="language-arrow" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M6 9L12 15L18 9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+              stroke-linejoin="round" />
+          </svg>
+        </span>
+      </button>
+
+      <div class="language-menu" id="languageMenu">
+        <button type="button" data-lang="he">עב</button>
+        <button type="button" data-lang="en">EN</button>
+        <button type="button" data-lang="ru">RU</button>
+        <button type="button" data-lang="fr">FR</button>
+      </div>
     </div>
 
     <button class="bag" id="openCart" aria-label="פתיחת סל הקניות"><span data-i18n="cartShort">סל</span> <span
@@ -113,7 +127,7 @@
       </div>
     </section>
 
-    <section class="section reviews reveal">
+    <!-- <section class="section reviews reveal">
       <div class="section-head">
         <p class="eyebrow" data-i18n="reviews">ביקורות</p>
         <h2 data-i18n="reviewsTitle">הלקוחות שלנו אוהבים</h2>
@@ -125,7 +139,7 @@
         <blockquote><span data-i18n="review3">“הכול — מהתקשורת ועד האריזה — היה מושלם.”</span><cite>— Liron</cite>
         </blockquote>
       </div>
-    </section>
+    </section> -->
 
     <section class="contact reveal" id="contact">
       <div>
@@ -136,8 +150,8 @@
         <div class="store-location">
           <span data-i18n="storeLocation">Расположение магазина</span>
 
-          <a href="https://maps.app.goo.gl/pvjuhUAAJC9216W18"
-            target="_blank" rel="noopener noreferrer" data-i18n="openMap">
+          <a href="https://maps.app.goo.gl/xzUX94hTXFVKZniR8" target="_blank" rel="noopener noreferrer"
+            data-i18n="openMap">
             Открыть в Google Maps
           </a>
         </div>
@@ -156,8 +170,7 @@
     <a class="logo" href="#" dir="ltr">TATI <span>flowers</span></a>
     <p>© 2026 TATI Flowers · Floral Studio</p>
     <p>Instagram · WhatsApp</p>
-    <a href="https://maps.app.goo.gl/pvjuhUAAJC9216W18"
-      target="_blank" rel="noopener noreferrer" data-i18n="openMap">
+    <a href="https://maps.app.goo.gl/xzUX94hTXFVKZniR8" target="_blank" rel="noopener noreferrer" data-i18n="openMap">
       Открыть в Google Maps
     </a>
   </footer>
