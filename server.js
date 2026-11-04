@@ -16,22 +16,23 @@ const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || `http://localhost:${PORT
 const ORDERS_FILE = path.join(__dirname, 'data', 'orders.json');
 const DEMO_PAYMENT = String(process.env.DEMO_PAYMENT || '').toLowerCase() === 'true';
 const { Pool } = pg;
+const DELIVERY_FEE = Math.max(0, Number(process.env.DELIVERY_FEE || 40));
 
 const pool = process.env.DATABASE_URL
   ? new Pool({
-      connectionString: process.env.DATABASE_URL
-    })
+    connectionString: process.env.DATABASE_URL
+  })
   : null;
 
 const FALLBACK_PRODUCTS = [
-  { id:'blush', name:'Blush', price:220, category:'love', description:'Пудровые сезонные цветы', image:'https://images.unsplash.com/photo-1561181286-d3fee7d55364?auto=format&fit=crop&w=900&q=82', active:true, sort:10 },
-  { id:'wild-garden', name:'Wild Garden', price:280, category:'everyday', description:'Свободный садовый букет', image:'https://images.unsplash.com/photo-1522673607200-164d1b6ce486?auto=format&fit=crop&w=900&q=82', active:true, sort:20 },
-  { id:'romance', name:'Romance', price:320, category:'love', description:'Нежный букет в мягких тонах', image:'https://images.unsplash.com/photo-1548094990-c16ca90f1f0d?auto=format&fit=crop&w=900&q=82', active:true, sort:30 },
-  { id:'pure', name:'Pure', price:240, category:'everyday', description:'Белые цветы и зелень', image:'https://images.unsplash.com/photo-1490750967868-88aa4486c946?auto=format&fit=crop&w=900&q=82', active:true, sort:40 },
-  { id:'soft-morning', name:'Soft Morning', price:260, category:'everyday', description:'Светлый воздушный микс', image:'https://images.unsplash.com/photo-1497250681960-ef046c08a56e?auto=format&fit=crop&w=900&q=82', active:true, sort:50 },
-  { id:'celebration', name:'Celebration', price:350, category:'event', description:'Выразительный праздничный букет', image:'https://images.unsplash.com/photo-1487070183336-b863922373d4?auto=format&fit=crop&w=900&q=82', active:true, sort:60 },
-  { id:'tender', name:'Tender', price:290, category:'love', description:'Розы и сезонные акценты', image:'https://images.unsplash.com/photo-1527061011665-3652c757a4d4?auto=format&fit=crop&w=900&q=82', active:true, sort:70 },
-  { id:'event-flowers', name:'Event Flowers', price:420, category:'event', description:'Композиция для особого события', image:'https://images.unsplash.com/photo-1507501336603-6e31db2be093?auto=format&fit=crop&w=900&q=82', active:true, sort:80 }
+  { id: 'blush', name: 'Blush', price: 220, category: 'love', description: 'Пудровые сезонные цветы', image: 'https://images.unsplash.com/photo-1561181286-d3fee7d55364?auto=format&fit=crop&w=900&q=82', active: true, sort: 10 },
+  { id: 'wild-garden', name: 'Wild Garden', price: 280, category: 'everyday', description: 'Свободный садовый букет', image: 'https://images.unsplash.com/photo-1522673607200-164d1b6ce486?auto=format&fit=crop&w=900&q=82', active: true, sort: 20 },
+  { id: 'romance', name: 'Romance', price: 320, category: 'love', description: 'Нежный букет в мягких тонах', image: 'https://images.unsplash.com/photo-1548094990-c16ca90f1f0d?auto=format&fit=crop&w=900&q=82', active: true, sort: 30 },
+  { id: 'pure', name: 'Pure', price: 240, category: 'everyday', description: 'Белые цветы и зелень', image: 'https://images.unsplash.com/photo-1490750967868-88aa4486c946?auto=format&fit=crop&w=900&q=82', active: true, sort: 40 },
+  { id: 'soft-morning', name: 'Soft Morning', price: 260, category: 'everyday', description: 'Светлый воздушный микс', image: 'https://images.unsplash.com/photo-1497250681960-ef046c08a56e?auto=format&fit=crop&w=900&q=82', active: true, sort: 50 },
+  { id: 'celebration', name: 'Celebration', price: 350, category: 'event', description: 'Выразительный праздничный букет', image: 'https://images.unsplash.com/photo-1487070183336-b863922373d4?auto=format&fit=crop&w=900&q=82', active: true, sort: 60 },
+  { id: 'tender', name: 'Tender', price: 290, category: 'love', description: 'Розы и сезонные акценты', image: 'https://images.unsplash.com/photo-1527061011665-3652c757a4d4?auto=format&fit=crop&w=900&q=82', active: true, sort: 70 },
+  { id: 'event-flowers', name: 'Event Flowers', price: 420, category: 'event', description: 'Композиция для особого события', image: 'https://images.unsplash.com/photo-1507501336603-6e31db2be093?auto=format&fit=crop&w=900&q=82', active: true, sort: 80 }
 ];
 
 const CATALOG_URL = String(process.env.GOOGLE_CATALOG_URL || '').trim();
@@ -252,7 +253,7 @@ function isValidEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value).trim());
 }
 function newOrderId() {
-  return `TATI-${new Date().toISOString().slice(0,10).replaceAll('-', '')}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+  return `TATI-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 }
 async function initDatabase() {
   if (!pool) {
@@ -437,21 +438,32 @@ async function normalizeCart(rawCart) {
   return { items, total };
 }
 function normalizeCustomer(raw = {}) {
+  const fulfillment = raw.fulfillment === 'pickup' ? 'pickup' : 'delivery';
+
   const customer = {
     name: cleanText(raw.name, 100),
     phone: cleanText(raw.phone, 30),
     email: cleanText(raw.email, 120),
+    fulfillment,
     city: cleanText(raw.city, 100),
     address: cleanText(raw.address, 220),
     deliveryDate: cleanText(raw.deliveryDate, 30),
     deliveryTime: cleanText(raw.deliveryTime, 60),
     note: cleanText(raw.note, 600)
   };
+
   if (customer.name.length < 2) throw new Error('Укажите имя');
   if (!isValidPhone(customer.phone)) throw new Error('Проверьте номер телефона');
   if (!isValidEmail(customer.email)) throw new Error('Проверьте email');
-  if (customer.city.length < 2) throw new Error('Укажите город');
-  if (customer.address.length < 4) throw new Error('Укажите адрес доставки');
+
+  if (fulfillment === 'delivery') {
+    if (customer.city.length < 2) throw new Error('Укажите город');
+    if (customer.address.length < 4) throw new Error('Укажите адрес доставки');
+  } else {
+    customer.city = '';
+    customer.address = '';
+  }
+
   return customer;
 }
 function formatMoney(value) {
@@ -505,6 +517,10 @@ function formatOrderMessage(order, title = '🌸 Новый заказ TATI Flow
     '🛍 СОСТАВ ЗАКАЗА',
     ...lines,
     '',
+    `🌸 Цветы: ₪${formatMoney(order.productsTotal ?? order.total)}`,
+    order.deliveryFee
+      ? `🚚 Доставка: ₪${formatMoney(order.deliveryFee)}`
+      : null,
     `💰 ИТОГО: ₪${formatMoney(order.total)}`,
     '',
     '👤 КЛИЕНТ',
@@ -512,8 +528,17 @@ function formatOrderMessage(order, title = '🌸 Новый заказ TATI Flow
     `📞 ${order.customer.phone}`,
     order.customer.email ? `✉️ ${order.customer.email}` : null,
     '',
-    '🚚 ДОСТАВКА',
-    `📍 ${order.customer.city}, ${order.customer.address}`,
+    order.customer.fulfillment === 'pickup'
+      ? '🏪 САМОВЫВОЗ'
+      : '🚚 ДОСТАВКА',
+
+    order.customer.fulfillment === 'pickup'
+      ? '📍 Shlomo Ibn Gabirol 54, Tel Aviv'
+      : `📍 ${order.customer.city}, ${order.customer.address}`,
+
+    order.customer.fulfillment === 'delivery'
+      ? `🚚 Стоимость доставки: ₪${formatMoney(order.deliveryFee)}`
+      : null,
     order.customer.deliveryDate ? `📅 ${order.customer.deliveryDate}` : null,
     order.customer.deliveryTime ? `🕒 ${order.customer.deliveryTime}` : null,
     order.customer.note ? `📝 ${order.customer.note}` : null
@@ -591,12 +616,28 @@ app.get('/api/products', async (req, res) => {
 });
 
 app.get('/api/config', (_req, res) => {
-  res.json({ paymentMode: DEMO_PAYMENT ? 'demo' : 'payplus', telegramConfigured: Boolean(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) });
+  res.json({
+    paymentMode: DEMO_PAYMENT ? 'demo' : 'payplus',
+    deliveryFee: DELIVERY_FEE,
+    pickupAddress: 'Shlomo Ibn Gabirol 54, Tel Aviv',
+    telegramConfigured: Boolean(
+      process.env.TELEGRAM_BOT_TOKEN &&
+      process.env.TELEGRAM_CHAT_ID
+    )
+  });
 });
 
 app.post('/api/checkout', async (req, res) => {
   try {
-    const { items, total } = await normalizeCart(req.body.cart);
+    const { items, total: productsTotal } = await normalizeCart(req.body.cart);
+    const customer = normalizeCustomer(req.body.customer);
+
+    const deliveryFee =
+      customer.fulfillment === 'delivery'
+        ? DELIVERY_FEE
+        : 0;
+
+    const total = productsTotal + deliveryFee;
 
     const rawLanguage = String(req.body.language || '').toLowerCase();
 
@@ -604,18 +645,19 @@ app.post('/api/checkout', async (req, res) => {
       ? rawLanguage
       : 'he';
 
-    
-    const customer = normalizeCustomer(req.body.customer);
+
+
     const order = {
-  id: newOrderId(),
-  items,
-  total,
-  customer,
-  language,
-  status: 'awaiting_payment',
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString()
-};
+      id: newOrderId(),
+      items,
+      productsTotal,
+      deliveryFee,
+      total,
+      customer,
+      status: 'awaiting_payment',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
     await saveOrder(order);
 
     // Send a useful pending notification too; a second message is sent after confirmed payment.
@@ -650,7 +692,7 @@ app.post('/api/payplus/callback', async (req, res) => {
     const raw = JSON.stringify(req.body).toLowerCase();
     const looksFailed = /"status"\s*:\s*"?(failed|failure|declined|cancel)/.test(raw) || /"status_code"\s*:\s*"?[1-9]/.test(raw);
     const order = await updateOrder(orderId, { status: looksFailed ? 'payment_failed' : 'paid', paymentCallback: req.body });
-    if (order && !looksFailed) await sendTelegram(formatOrderMessage(order, '✅ ЗАКАЗ ОПЛАЧЕН')); 
+    if (order && !looksFailed) await sendTelegram(formatOrderMessage(order, '✅ ЗАКАЗ ОПЛАЧЕН'));
     res.json({ ok: true });
   } catch (error) {
     console.error(error);
@@ -673,9 +715,9 @@ app.get('/demo-payment', async (req, res) => {
 
   const rawLang = String(order.language || '').toLowerCase();
 
-const lang = ['he', 'en', 'ru'].includes(rawLang)
-  ? rawLang
-  : 'he';
+  const lang = ['he', 'en', 'ru'].includes(rawLang)
+    ? rawLang
+    : 'he';
 
   const translations = {
     he: {
@@ -918,17 +960,15 @@ app.get('/admin', adminAuth, async (req, res) => {
                 ${escapeHtml(customer.deliveryTime || '—')}
               </p>
 
-              ${
-                customer.email
-                  ? `<p>Email: ${escapeHtml(customer.email)}</p>`
-                  : ''
-              }
+              ${customer.email
+          ? `<p>Email: ${escapeHtml(customer.email)}</p>`
+          : ''
+        }
 
-              ${
-                customer.note
-                  ? `<p>Комментарий: ${escapeHtml(customer.note)}</p>`
-                  : ''
-              }
+              ${customer.note
+          ? `<p>Комментарий: ${escapeHtml(customer.note)}</p>`
+          : ''
+        }
             </div>
           </details>
         </article>
