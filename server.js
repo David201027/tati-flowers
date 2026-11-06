@@ -1,465 +1,1391 @@
 import 'dotenv/config';
+
 import crypto from 'node:crypto';
+
 import fs from 'node:fs/promises';
+
 import path from 'node:path';
+
 import { fileURLToPath } from 'node:url';
+
 import express from 'express';
+
 import helmet from 'helmet';
+
 import { rateLimit } from 'express-rate-limit';
+
 import pg from 'pg';
 
+
+
 const __filename = fileURLToPath(import.meta.url);
+
 const __dirname = path.dirname(__filename);
+
 const app = express();
+
 const PORT = Number(process.env.PORT || 3000);
+
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
+
 const ORDERS_FILE = path.join(__dirname, 'data', 'orders.json');
+
 const DEMO_PAYMENT = String(process.env.DEMO_PAYMENT || '').toLowerCase() === 'true';
+
 const { Pool } = pg;
-const DELIVERY_FEE = Math.max(0, Number(process.env.DELIVERY_FEE || 40));
+
+const DELIVERY_FEES = {
+  'tel aviv': 30,
+  'tel aviv-yafo': 30,
+  'תל אביב': 30,
+  'תל אביב-יפו': 30,
+  'holon': 40,
+  'חולון': 40,
+  'bat yam': 40,
+  'בת ים': 40,
+  'ramat gan': 40,
+  'רמת גן': 40,
+  'givatayim': 40,
+  'גבעתיים': 40,
+  'bnei brak': 45,
+  'בני ברק': 45,
+  'rishon lezion': 50,
+  'ראשון לציון': 50,
+  'petah tikva': 50,
+  'פתח תקווה': 50,
+  'herzliya': 60,
+  'הרצליה': 60
+};
+
+const DEFAULT_DELIVERY_FEE = 60;
+const ISRAEL_TIME_ZONE = 'Asia/Jerusalem';
+const PREPARATION_MINUTES = Math.max(0, Number(process.env.PREPARATION_MINUTES || 90));
+const STORE_OPEN_MINUTES = Math.max(0, Number(process.env.STORE_OPEN_HOUR || 9) * 60);
+const STORE_CLOSE_MINUTES = Math.min(24 * 60, Number(process.env.STORE_CLOSE_HOUR || 21) * 60);
+const SLOT_MINUTES = 60;
+const DELIVERY_SLOT_CAPACITY = Math.max(1, Number(process.env.DELIVERY_SLOT_CAPACITY || 4));
+const BOOKABLE_DAYS_AHEAD = 30;
+const DELIVERY_HOLD_MINUTES = 20;
+
+
 
 const pool = process.env.DATABASE_URL
+
   ? new Pool({
+
     connectionString: process.env.DATABASE_URL
+
   })
+
   : null;
 
+
+
 const FALLBACK_PRODUCTS = [
+
   { id: 'blush', name: 'Blush', price: 220, category: 'love', description: 'Пудровые сезонные цветы', image: 'https://images.unsplash.com/photo-1561181286-d3fee7d55364?auto=format&fit=crop&w=900&q=82', active: true, sort: 10 },
+
   { id: 'wild-garden', name: 'Wild Garden', price: 280, category: 'everyday', description: 'Свободный садовый букет', image: 'https://images.unsplash.com/photo-1522673607200-164d1b6ce486?auto=format&fit=crop&w=900&q=82', active: true, sort: 20 },
+
   { id: 'romance', name: 'Romance', price: 320, category: 'love', description: 'Нежный букет в мягких тонах', image: 'https://images.unsplash.com/photo-1548094990-c16ca90f1f0d?auto=format&fit=crop&w=900&q=82', active: true, sort: 30 },
+
   { id: 'pure', name: 'Pure', price: 240, category: 'everyday', description: 'Белые цветы и зелень', image: 'https://images.unsplash.com/photo-1490750967868-88aa4486c946?auto=format&fit=crop&w=900&q=82', active: true, sort: 40 },
+
   { id: 'soft-morning', name: 'Soft Morning', price: 260, category: 'everyday', description: 'Светлый воздушный микс', image: 'https://images.unsplash.com/photo-1497250681960-ef046c08a56e?auto=format&fit=crop&w=900&q=82', active: true, sort: 50 },
+
   { id: 'celebration', name: 'Celebration', price: 350, category: 'event', description: 'Выразительный праздничный букет', image: 'https://images.unsplash.com/photo-1487070183336-b863922373d4?auto=format&fit=crop&w=900&q=82', active: true, sort: 60 },
+
   { id: 'tender', name: 'Tender', price: 290, category: 'love', description: 'Розы и сезонные акценты', image: 'https://images.unsplash.com/photo-1527061011665-3652c757a4d4?auto=format&fit=crop&w=900&q=82', active: true, sort: 70 },
+
   { id: 'event-flowers', name: 'Event Flowers', price: 420, category: 'event', description: 'Композиция для особого события', image: 'https://images.unsplash.com/photo-1507501336603-6e31db2be093?auto=format&fit=crop&w=900&q=82', active: true, sort: 80 }
+
 ];
 
+
+
 const CATALOG_URL = String(process.env.GOOGLE_CATALOG_URL || '').trim();
+
 const CATALOG_CACHE_MS = Math.max(10_000, Number(process.env.CATALOG_CACHE_SECONDS || 60) * 1000);
+
 const CATALOG_TIMEOUT_MS = Math.max(5_000, Number(process.env.CATALOG_TIMEOUT_MS || 20_000));
+
 let catalogCache = { products: FALLBACK_PRODUCTS, expiresAt: 0, source: 'fallback' };
 
+
+
 function parseSheetBoolean(value, defaultValue = false) {
+
   if (typeof value === 'boolean') return value;
+
   if (value === undefined || value === null || value === '') return defaultValue;
+
   const normalized = String(value).trim().toLowerCase();
+
   if (['true', '1', 'yes', 'да', 'כן', 'on', 'active'].includes(normalized)) return true;
+
   if (['false', '0', 'no', 'нет', 'לא', 'off', 'inactive'].includes(normalized)) return false;
+
   return defaultValue;
+
 }
 
+
+
 function sanitizeProduct(row = {}) {
+
   const id = cleanText(row.id ?? row.ID, 80).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+
   const name = cleanText(row.name ?? row.Name ?? row['Название'], 120);
+
   const rawPrice = String(row.price ?? row.Price ?? row['Цена'] ?? '').replace(/\s/g, '').replace(',', '.').replace(/[^0-9.]/g, '');
+
   const price = Number(rawPrice);
+
+
 
   if (!id || !name || !Number.isFinite(price) || price <= 0) return null;
 
 
+
+
+
   const activeValue = row['is-active'] ?? row.active ?? row['Активен'];
+
   const imageValue = row.photo ?? row.image ?? row['Фото URL'];
+
   const sortValue = row.order ?? row.sort ?? row['Порядок'];
+
   const featuredValue = row.featured ?? row['Рекомендуемый'];
 
+
+
+
+
+
+
   return {
+
     id,
+
     name,
+
     nameHe: cleanText(row['name-he'] ?? row.name_he ?? row['שם'], 120),
+
     nameEn: cleanText(row['name-en'] ?? row.name_en, 120),
+
     nameRu: cleanText(row['name-ru'] ?? row.name_ru ?? row['Название RU'], 120),
+    nameUk: cleanText(row['name-uk'] ?? row.name_uk, 120),
+    nameFr: cleanText(row['name-fr'] ?? row.name_fr, 120),
+
     price: Math.round(price * 100) / 100,
+
     priceS: Number(row['price-s']) || null,
+
     priceM: Number(row['price-m']) || null,
+
     priceL: Number(row['price-l']) || null,
+
+    quantityMin: Number(row['quantity-min']) || null,
+
+    quantityDefault: Number(row['quantity-default']) || null,
+
+    quantityMax: Number(row['quantity-max']) || null,
+
+    unitPrice: Number(row['unit-price']) || null,
+
     category: cleanText(row.category ?? row.Category ?? row['Категория'] ?? 'everyday', 40).toLowerCase() || 'everyday',
+
     description: cleanText(row.description ?? row.Description ?? row['Описание'], 260),
+
     descriptionHe: cleanText(row['description-he'] ?? row.description_he ?? row['תיאור'], 260),
+
     descriptionEn: cleanText(row['description-en'] ?? row.description_en, 260),
+
     descriptionRu: cleanText(row['description-ru'] ?? row.description_ru ?? row['Описание RU'], 260),
+    descriptionUk: cleanText(row['description-uk'] ?? row.description_uk, 260),
+    descriptionFr: cleanText(row['description-fr'] ?? row.description_fr, 260),
+
     image: cleanText(imageValue, 1200),
+
     active: parseSheetBoolean(activeValue, true),
+
     sort: Number.isFinite(Number(sortValue)) ? Number(sortValue) : 9999,
+
     featured: parseSheetBoolean(featuredValue, false)
+
   };
+
 }
+
+
 
 function parseCsv(text) {
+
   const rows = [];
+
   let row = [];
+
   let field = '';
+
   let quoted = false;
 
+
+
   for (let i = 0; i < text.length; i += 1) {
+
     const char = text[i];
+
     const next = text[i + 1];
 
+
+
     if (char === '"') {
+
       if (quoted && next === '"') {
+
         field += '"';
+
         i += 1;
+
       } else {
+
         quoted = !quoted;
+
       }
+
       continue;
+
     }
+
+
 
     if (char === ',' && !quoted) {
+
       row.push(field);
+
       field = '';
+
       continue;
+
     }
+
+
 
     if ((char === '\n' || char === '\r') && !quoted) {
+
       if (char === '\r' && next === '\n') i += 1;
+
       row.push(field);
+
       field = '';
+
       if (row.some(value => String(value).trim() !== '')) rows.push(row);
+
       row = [];
+
       continue;
+
     }
+
+
 
     field += char;
+
   }
+
+
 
   row.push(field);
+
   if (row.some(value => String(value).trim() !== '')) rows.push(row);
+
   if (!rows.length) return [];
 
+
+
   const headers = rows.shift().map((value, index) => {
+
     const cleaned = String(value).replace(/^\uFEFF/, '').trim();
+
     return cleaned || `column-${index + 1}`;
+
   });
 
+
+
   return rows.map(values => Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ''])));
+
 }
+
+
 
 async function fetchCatalogCsv() {
+
   let lastError;
+
   for (let attempt = 1; attempt <= 2; attempt += 1) {
+
     try {
+
       const response = await fetch(CATALOG_URL, {
+
         redirect: 'follow',
+
         headers: { accept: 'text/csv,text/plain,*/*', 'cache-control': 'no-cache' },
+
         signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS)
+
       });
+
       if (!response.ok) throw new Error(`Google Sheets CSV HTTP ${response.status}`);
+
       return { csv: await response.text(), contentType: response.headers.get('content-type') || '' };
+
     } catch (error) {
+
       lastError = error;
+
       if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 650));
+
     }
+
   }
+
   throw lastError;
+
 }
+
+
 
 async function getCatalog({ force = false } = {}) {
+
   if (!CATALOG_URL) return { products: FALLBACK_PRODUCTS, source: 'fallback' };
+
   if (!force && Date.now() < catalogCache.expiresAt) return catalogCache;
+
   try {
+
     const { csv, contentType } = await fetchCatalogCsv();
+
     if (/text\/html/i.test(contentType) || /^\s*<!doctype html/i.test(csv)) {
+
       throw new Error('Google Sheets вернул HTML вместо CSV');
+
     }
+
+
 
     const rows = parseCsv(csv);
+
     const products = rows
+
       .map(sanitizeProduct)
+
       .filter(Boolean)
+
       .filter(product => product.active)
+
       .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name));
 
+
+
     if (!products.length) throw new Error('В публичной Google Таблице нет активных товаров');
+
     catalogCache = { products, source: 'google-csv', expiresAt: Date.now() + CATALOG_CACHE_MS };
+
     return catalogCache;
+
   } catch (error) {
+
     console.error('Catalog sync failed:', error.message);
+
     if (String(catalogCache.source).startsWith('google') && catalogCache.products.length) {
+
       return { ...catalogCache, source: 'google-csv-stale' };
+
     }
+
     return { products: FALLBACK_PRODUCTS, source: 'fallback-error' };
+
   }
+
 }
+
+
 
 app.set('trust proxy', 1);
+
 app.use(helmet({ contentSecurityPolicy: false }));
+
 app.use(express.json({ limit: '100kb' }));
+
 app.use(express.urlencoded({ extended: false, limit: '100kb' }));
+
 app.use('/api', rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: 'draft-8', legacyHeaders: false }));
+
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 
+
+
 function cleanText(value, max = 300) {
+
   return String(value ?? '').replace(/[<>]/g, '').trim().slice(0, max);
+
 }
+
 function escapeHtml(value) {
+
   return String(value ?? '')
+
     .replaceAll('&', '&amp;')
+
     .replaceAll('<', '&lt;')
+
     .replaceAll('>', '&gt;')
+
     .replaceAll('"', '&quot;')
+
     .replaceAll("'", '&#039;');
+
 }
+
+
 
 function secureCompare(a, b) {
+
   const hashA = crypto.createHash('sha256').update(String(a)).digest();
+
   const hashB = crypto.createHash('sha256').update(String(b)).digest();
 
+
+
   return crypto.timingSafeEqual(hashA, hashB);
+
 }
 
+
+
 function adminAuth(req, res, next) {
+
   const adminUser = String(process.env.ADMIN_USER || '');
+
   const adminPassword = String(process.env.ADMIN_PASSWORD || '');
 
+
+
   if (!adminUser || !adminPassword) {
+
     return res.status(503).send('Admin panel is not configured');
+
   }
+
+
 
   const auth = String(req.headers.authorization || '');
 
+
+
   if (!auth.startsWith('Basic ')) {
+
     res.set('WWW-Authenticate', 'Basic realm="TATI Flowers Admin"');
+
     return res.status(401).send('Authorization required');
+
   }
+
+
 
   let decoded = '';
 
+
+
   try {
+
     decoded = Buffer.from(auth.slice(6), 'base64').toString('utf8');
+
   } catch {
+
     return res.status(401).send('Invalid authorization');
+
   }
+
+
 
   const separator = decoded.indexOf(':');
 
+
+
   if (separator < 0) {
+
     return res.status(401).send('Invalid authorization');
+
   }
+
+
 
   const username = decoded.slice(0, separator);
+
   const password = decoded.slice(separator + 1);
 
+
+
   if (
+
     !secureCompare(username, adminUser) ||
+
     !secureCompare(password, adminPassword)
+
   ) {
+
     res.set('WWW-Authenticate', 'Basic realm="TATI Flowers Admin"');
+
     return res.status(401).send('Wrong login or password');
+
   }
+
+
 
   next();
+
 }
+
 function isValidPhone(value) {
-  return /^[+\d][\d\s()\-]{7,19}$/.test(String(value || '').trim());
+
+  return /^[+\d][\d\s()\\-]{7,19}$/.test(String(value || '').trim());
+
 }
+
 function isValidEmail(value) {
+
   if (!value) return true;
+
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value).trim());
+
 }
-function newOrderId() {
-  return `TATI-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+function normalizeCityName(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
 }
-async function initDatabase() {
-  if (!pool) {
-    console.log('PostgreSQL: DATABASE_URL отсутствует, используется локальный orders.json');
-    return;
+
+function getDeliveryFee(city) {
+  const key = normalizeCityName(city);
+  return DELIVERY_FEES[key] ?? DEFAULT_DELIVERY_FEE;
+}
+
+
+const israelFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: ISRAEL_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23'
+});
+
+function getIsraelNowParts(date = new Date()) {
+  const parts = Object.fromEntries(
+    israelFormatter
+      .formatToParts(date)
+      .filter(part => part.type !== 'literal')
+      .map(part => [part.type, part.value])
+  );
+
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    minutes:
+      Number(parts.hour) * 60 +
+      Number(parts.minute)
+  };
+}
+
+function addDaysToDateString(dateString, days) {
+  const [year, month, day] =
+    dateString.split('-').map(Number);
+
+  const date =
+    new Date(
+      Date.UTC(
+        year,
+        month - 1,
+        day + days,
+        12
+      )
+    );
+
+  return date.toISOString().slice(0, 10);
+}
+
+function isValidDateString(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(
+    String(value || '')
+  );
+}
+
+function isValidTimeString(value) {
+  return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(
+    String(value || '')
+  );
+}
+
+function timeToMinutes(value) {
+  const [hours, minutes] =
+    String(value || '').split(':').map(Number);
+
+  return hours * 60 + minutes;
+}
+
+function minutesToTime(value) {
+  const hours =
+    Math.floor(value / 60);
+
+  const minutes =
+    value % 60;
+
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+function formatSlotWindow(value) {
+  if (!isValidTimeString(value)) return String(value || '');
+
+  const start = timeToMinutes(value);
+  const end = start + SLOT_MINUTES;
+
+  return `${minutesToTime(start)}–${minutesToTime(end)}`;
+}
+
+function workingMinutesUntil(
+  now,
+  targetDate,
+  targetMinutes
+) {
+  if (
+    targetDate < now.date ||
+    targetMinutes < STORE_OPEN_MINUTES ||
+    targetMinutes > STORE_CLOSE_MINUTES
+  ) {
+    return 0;
   }
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS orders (
-      id TEXT PRIMARY KEY,
-      items JSONB NOT NULL,
-      total NUMERIC(10,2) NOT NULL,
-      customer JSONB NOT NULL,
-      language TEXT DEFAULT 'he',
-      status TEXT NOT NULL,
-      payment_provider TEXT,
-      payment_callback JSONB,
-      payplus_page_request_uid TEXT,
-      created_at TIMESTAMPTZ NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL
-    )
-  `);
+  let total = 0;
+  let date = now.date;
 
-  console.log('PostgreSQL: orders table ready');
+  for (
+    let index = 0;
+    index <= BOOKABLE_DAYS_AHEAD + 1;
+    index += 1
+  ) {
+    if (date > targetDate) break;
+
+    const isToday =
+      date === now.date;
+
+    const isTargetDay =
+      date === targetDate;
+
+    const start =
+      isToday
+        ? Math.max(
+            STORE_OPEN_MINUTES,
+            now.minutes
+          )
+        : STORE_OPEN_MINUTES;
+
+    const end =
+      isTargetDay
+        ? Math.min(
+            STORE_CLOSE_MINUTES,
+            targetMinutes
+          )
+        : STORE_CLOSE_MINUTES;
+
+    if (end > start) {
+      total += end - start;
+    }
+
+    if (isTargetDay) break;
+
+    date = addDaysToDateString(
+      date,
+      1
+    );
+  }
+
+  return total;
 }
 
-async function readOrders() {
-  if (!pool) {
-    try {
-      return JSON.parse(await fs.readFile(ORDERS_FILE, 'utf8'));
-    } catch {
-      return [];
+function orderBlocksDeliverySlot(order) {
+  if (
+    !order ||
+    order.customer?.fulfillment !== 'delivery'
+  ) {
+    return false;
+  }
+
+  if (
+    [
+      'cancelled',
+      'payment_failed',
+      'payment_configuration_error'
+    ].includes(order.status)
+  ) {
+    return false;
+  }
+
+  if (
+    order.status !== 'awaiting_payment'
+  ) {
+    return true;
+  }
+
+  const createdAt =
+    new Date(order.createdAt).getTime();
+
+  return (
+    Number.isFinite(createdAt) &&
+    Date.now() - createdAt <=
+      DELIVERY_HOLD_MINUTES * 60_000
+  );
+}
+
+async function getDeliverySlotLoads() {
+  const orders = await readOrders();
+  const loads = new Map();
+
+  orders
+    .filter(orderBlocksDeliverySlot)
+    .forEach(order => {
+      const date = cleanText(order.customer?.deliveryDate, 20);
+      const time = cleanText(order.customer?.deliveryTime, 20);
+
+      if (!date || !time) return;
+
+      const key = `${date}|${time}`;
+      loads.set(key, (loads.get(key) || 0) + 1);
+    });
+
+  return loads;
+}
+
+async function buildSchedule(
+  fulfillment = 'delivery'
+) {
+  const now =
+    getIsraelNowParts();
+
+  const occupied =
+    fulfillment === 'delivery'
+      ? await getDeliverySlotLoads()
+      : new Map();
+
+  const days = [];
+
+  for (
+    let offset = 0;
+    offset <= BOOKABLE_DAYS_AHEAD;
+    offset += 1
+  ) {
+    const date =
+      addDaysToDateString(
+        now.date,
+        offset
+      );
+
+    const slots = [];
+
+    for (
+      let minutes = STORE_OPEN_MINUTES;
+      minutes <= STORE_CLOSE_MINUTES - SLOT_MINUTES;
+      minutes += SLOT_MINUTES
+    ) {
+      const workingMinutes =
+        workingMinutesUntil(
+          now,
+          date,
+          minutes
+        );
+
+      if (
+        workingMinutes <
+        PREPARATION_MINUTES
+      ) {
+        continue;
+      }
+
+      const time =
+        minutesToTime(minutes);
+
+      if (
+        fulfillment === 'delivery' &&
+        (occupied.get(`${date}|${time}`) || 0) >= DELIVERY_SLOT_CAPACITY
+      ) {
+        continue;
+      }
+
+      slots.push(time);
+    }
+
+    if (slots.length) {
+      days.push({
+        date,
+        slots
+      });
     }
   }
 
-  const result = await pool.query(`
-    SELECT
-      id,
-      items,
-      total,
-      customer,
-      language,
-      status,
-      payment_provider AS "paymentProvider",
-      payment_callback AS "paymentCallback",
-      payplus_page_request_uid AS "payPlusPageRequestUid",
-      created_at AS "createdAt",
-      updated_at AS "updatedAt"
-    FROM orders
-    ORDER BY created_at DESC
-  `);
+  const firstAvailable =
+    days.length
+      ? {
+          date: days[0].date,
+          time: days[0].slots[0]
+        }
+      : null;
 
-  return result.rows.map(order => ({
-    ...order,
-    total: Number(order.total)
-  }));
+  return {
+    days,
+    firstAvailable
+  };
 }
 
+async function validateOrderSlot(customer) {
+  if (
+    !isValidDateString(
+      customer.deliveryDate
+    ) ||
+    !isValidTimeString(
+      customer.deliveryTime
+    )
+  ) {
+    throw new Error(
+      'Выберите дату и время'
+    );
+  }
+
+  const schedule =
+    await buildSchedule(
+      customer.fulfillment
+    );
+
+  const day =
+    schedule.days.find(
+      item =>
+        item.date ===
+        customer.deliveryDate
+    );
+
+  if (
+    !day ||
+    !day.slots.includes(
+      customer.deliveryTime
+    )
+  ) {
+    throw new Error(
+      'Выбранное время уже недоступно. Пожалуйста, выберите другое.'
+    );
+  }
+}
+
+
+function normalizeSize(value) {
+  const size = String(value || '').trim().toUpperCase();
+  return ['S', 'M', 'L'].includes(size) ? size : '';
+}
+
+function getProductVariant(product, row = {}) {
+  const requestedCount = row?.flowerCount === null || row?.flowerCount === undefined || row?.flowerCount === ''
+    ? null
+    : Number.parseInt(row.flowerCount, 10);
+
+  if (requestedCount !== null) {
+    const min = Number(product.quantityMin);
+    const max = Number(product.quantityMax);
+    const unitPrice = Number(product.unitPrice);
+
+    if (
+      !Number.isInteger(requestedCount) ||
+      !Number.isFinite(min) ||
+      !Number.isFinite(max) ||
+      !Number.isFinite(unitPrice) ||
+      requestedCount < min ||
+      requestedCount > max ||
+      unitPrice <= 0
+    ) {
+      throw new Error('Некорректное количество цветов');
+    }
+
+    return {
+      size: null,
+      flowerCount: requestedCount,
+      price: Math.round(requestedCount * unitPrice)
+    };
+  }
+
+  const size = normalizeSize(row?.size);
+
+  if (size) {
+    const field = {
+      S: 'priceS',
+      M: 'priceM',
+      L: 'priceL'
+    }[size];
+
+    const price = Number(product[field]);
+
+    if (!Number.isFinite(price) || price <= 0) {
+      throw new Error('Этот размер букета недоступен');
+    }
+
+    return {
+      size,
+      flowerCount: null,
+      price
+    };
+  }
+
+  return {
+    size: null,
+    flowerCount: null,
+    price: Number(product.price)
+  };
+}
+
+function newOrderId() {
+
+  return `TATI-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+}
+
+async function initDatabase() {
+
+  if (!pool) {
+
+    console.log('PostgreSQL: DATABASE_URL отсутствует, используется локальный orders.json');
+
+    return;
+
+  }
+
+
+
+  await pool.query(`
+
+    CREATE TABLE IF NOT EXISTS orders (
+
+      id TEXT PRIMARY KEY,
+
+      items JSONB NOT NULL,
+
+      total NUMERIC(10,2) NOT NULL,
+
+      products_total NUMERIC(10,2),
+
+      delivery_fee NUMERIC(10,2),
+
+      customer JSONB NOT NULL,
+
+      language TEXT DEFAULT 'he',
+
+      status TEXT NOT NULL,
+
+      payment_provider TEXT,
+
+      payment_callback JSONB,
+
+      payplus_page_request_uid TEXT,
+
+      created_at TIMESTAMPTZ NOT NULL,
+
+      updated_at TIMESTAMPTZ NOT NULL
+
+    )
+
+  `);
+
+  await pool.query(`
+    ALTER TABLE orders
+      ADD COLUMN IF NOT EXISTS products_total NUMERIC(10,2),
+      ADD COLUMN IF NOT EXISTS delivery_fee NUMERIC(10,2)
+  `);
+
+  console.log('PostgreSQL: orders table ready');
+
+}
+
+
+
+async function readOrders() {
+
+  if (!pool) {
+
+    try {
+
+      return JSON.parse(await fs.readFile(ORDERS_FILE, 'utf8'));
+
+    } catch {
+
+      return [];
+
+    }
+
+  }
+
+
+
+  const result = await pool.query(`
+
+    SELECT
+
+      id,
+
+      items,
+
+      total,
+
+      products_total AS "productsTotal",
+
+      delivery_fee AS "deliveryFee",
+
+      customer,
+
+      language,
+
+      status,
+
+      payment_provider AS "paymentProvider",
+
+      payment_callback AS "paymentCallback",
+
+      payplus_page_request_uid AS "payPlusPageRequestUid",
+
+      created_at AS "createdAt",
+
+      updated_at AS "updatedAt"
+
+    FROM orders
+
+    ORDER BY created_at DESC
+
+  `);
+
+
+
+  return result.rows.map(order => ({
+
+    ...order,
+
+    total: Number(order.total),
+    productsTotal: Number(order.productsTotal ?? order.total),
+    deliveryFee: Number(order.deliveryFee ?? 0)
+  }));
+
+}
+
+
+
 async function writeOrders(orders) {
+
   if (pool) return;
+
+
 
   await fs.mkdir(path.dirname(ORDERS_FILE), { recursive: true });
 
+
+
   const tmp = `${ORDERS_FILE}.tmp`;
 
+
+
   await fs.writeFile(
+
     tmp,
+
     JSON.stringify(orders, null, 2)
+
   );
 
+
+
   await fs.rename(tmp, ORDERS_FILE);
+
 }
+
+
 
 async function saveOrder(order) {
+
   if (!pool) {
+
     const orders = await readOrders();
+
     orders.unshift(order);
+
     await writeOrders(orders.slice(0, 5000));
+
     return order;
+
   }
 
+
+
   await pool.query(`
+
     INSERT INTO orders (
+
       id,
+
       items,
+
       total,
+
+      products_total,
+
+      delivery_fee,
+
       customer,
+
       language,
+
       status,
+
       created_at,
+
       updated_at
+
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+
   `, [
+
     order.id,
+
     JSON.stringify(order.items),
+
     order.total,
+
+    order.productsTotal,
+
+    order.deliveryFee,
+
     JSON.stringify(order.customer),
+
     order.language || 'he',
+
     order.status,
+
     order.createdAt,
+
     order.updatedAt
+
   ]);
 
+
+
   return order;
+
 }
 
+
+
 async function updateOrder(orderId, patch) {
+
   if (!pool) {
+
     const orders = await readOrders();
+
     const index = orders.findIndex(o => o.id === orderId);
+
+
 
     if (index < 0) return null;
 
+
+
     orders[index] = {
+
       ...orders[index],
+
       ...patch,
+
       updatedAt: new Date().toISOString()
+
     };
+
+
 
     await writeOrders(orders);
 
+
+
     return orders[index];
+
   }
 
+
+
   const current = await pool.query(
+
     `SELECT * FROM orders WHERE id = $1`,
+
     [orderId]
+
   );
+
+
 
   if (!current.rows.length) return null;
 
+
+
   const old = current.rows[0];
 
+
+
   const updated = {
+
     status: patch.status ?? old.status,
+
     paymentProvider:
+
       patch.paymentProvider ?? old.payment_provider,
+
     paymentCallback:
+
       patch.paymentCallback ?? old.payment_callback,
+
     payPlusPageRequestUid:
+
       patch.payPlusPageRequestUid ?? old.payplus_page_request_uid,
+
     updatedAt: new Date().toISOString()
+
   };
 
+
+
   await pool.query(`
+
     UPDATE orders
+
     SET
+
       status = $2,
+
       payment_provider = $3,
+
       payment_callback = $4,
+
       payplus_page_request_uid = $5,
+
       updated_at = $6
+
     WHERE id = $1
+
   `, [
+
     orderId,
+
     updated.status,
+
     updated.paymentProvider,
+
     updated.paymentCallback
+
       ? JSON.stringify(updated.paymentCallback)
+
       : null,
+
     updated.payPlusPageRequestUid,
+
     updated.updatedAt
+
   ]);
+
+
 
   const orders = await readOrders();
 
+
+
   return orders.find(order => order.id === orderId) || null;
+
 }
+
 async function normalizeCart(rawCart) {
-  if (!Array.isArray(rawCart) || rawCart.length === 0 || rawCart.length > 30) throw new Error('Корзина пуста');
+  if (!Array.isArray(rawCart) || rawCart.length === 0 || rawCart.length > 30) {
+    throw new Error('Корзина пуста');
+  }
+
   const { products } = await getCatalog({ force: true });
   const productMap = new Map(products.map(product => [product.id, product]));
+
   const items = rawCart.map(row => {
     const id = cleanText(row?.id, 80);
     const product = productMap.get(id);
     const quantity = Math.max(1, Math.min(20, Number.parseInt(row?.quantity, 10) || 1));
-    if (!product) throw new Error('Один из букетов больше недоступен. Обновите страницу и проверьте корзину.');
-    return { id, name: product.name, price: product.price, quantity, lineTotal: product.price * quantity };
+
+    if (!product) {
+      throw new Error('Один из букетов больше недоступен. Обновите страницу и проверьте корзину.');
+    }
+
+    const variant = getProductVariant(product, row);
+
+    return {
+      id,
+      name: product.name,
+      size: variant.size,
+      flowerCount: variant.flowerCount,
+      price: variant.price,
+      quantity,
+      lineTotal: variant.price * quantity
+    };
   });
+
   const total = items.reduce((sum, item) => sum + item.lineTotal, 0);
   return { items, total };
 }
+
 function normalizeCustomer(raw = {}) {
+
   const fulfillment = raw.fulfillment === 'pickup' ? 'pickup' : 'delivery';
 
+
+
   const customer = {
+
     name: cleanText(raw.name, 100),
+
     phone: cleanText(raw.phone, 30),
+
     email: cleanText(raw.email, 120),
+
     fulfillment,
+
     city: cleanText(raw.city, 100),
+
     address: cleanText(raw.address, 220),
+
     deliveryDate: cleanText(raw.deliveryDate, 30),
+
     deliveryTime: cleanText(raw.deliveryTime, 60),
+
     note: cleanText(raw.note, 600)
+
   };
 
+
+
   if (customer.name.length < 2) throw new Error('Укажите имя');
+
   if (!isValidPhone(customer.phone)) throw new Error('Проверьте номер телефона');
+
   if (!isValidEmail(customer.email)) throw new Error('Проверьте email');
+
+
 
   if (fulfillment === 'delivery') {
     if (customer.city.length < 2) throw new Error('Укажите город');
@@ -469,776 +1395,1704 @@ function normalizeCustomer(raw = {}) {
     customer.address = '';
   }
 
+  if (!customer.deliveryDate || !customer.deliveryTime) {
+    throw new Error('Выберите дату и время');
+  }
+
   return customer;
+
 }
+
 function formatMoney(value) {
+
   return new Intl.NumberFormat('he-IL', { maximumFractionDigits: 2 }).format(Number(value || 0));
+
 }
+
 function formatIsraelDate(iso) {
+
   try {
+
     return new Intl.DateTimeFormat('ru-RU', {
+
       timeZone: 'Asia/Jerusalem', day: '2-digit', month: '2-digit', year: 'numeric',
+
       hour: '2-digit', minute: '2-digit'
+
     }).format(new Date(iso));
+
   } catch { return iso || ''; }
+
 }
+
+
 
 function orderStatusLabel(status) {
+
   return ({
+
     awaiting_payment: 'Ожидает оплату',
+
     paid: 'Оплачен',
+
     preparing: 'В работе',
+
     ready: 'Готов',
+
     delivered: 'Доставлен',
+
     cancelled: 'Отменён',
+
     payment_failed: 'Оплата не прошла',
+
     payment_configuration_error: 'Оплата не настроена'
+
   })[status] || status;
+
 }
+
+
 
 function formatAdminDate(iso) {
+
   try {
+
     return new Intl.DateTimeFormat('ru-RU', {
+
       timeZone: 'Asia/Jerusalem',
+
       day: '2-digit',
+
       month: '2-digit',
+
       year: 'numeric',
+
       hour: '2-digit',
+
       minute: '2-digit'
+
     }).format(new Date(iso));
+
   } catch {
+
     return iso || '';
+
   }
+
 }
+
+
 
 function formatOrderMessage(order, title = '🌸 Новый заказ TATI Flowers') {
-  const lines = order.items.map((i, index) => `${index + 1}. ${i.name}\n   ${i.quantity} × ₪${formatMoney(i.price)} = ₪${formatMoney(i.lineTotal)}`);
+
+  const lines = order.items.map((i, index) => {
+    const variant = i.flowerCount
+      ? ` · ${i.flowerCount} цветов`
+      : i.size
+        ? ` · размер ${i.size}`
+        : '';
+
+    return `${index + 1}. ${i.name}${variant}\n   ${i.quantity} × ₪${formatMoney(i.price)} = ₪${formatMoney(i.lineTotal)}`;
+  });
+
   return [
+
     title,
+
     `№ ${order.id}`,
+
     `Статус: ${orderStatusLabel(order.status)}`,
+
     `Создан: ${formatIsraelDate(order.createdAt)}`,
+
     '',
+
     '🛍 СОСТАВ ЗАКАЗА',
+
     ...lines,
+
     '',
+
     `🌸 Цветы: ₪${formatMoney(order.productsTotal ?? order.total)}`,
+
     order.deliveryFee
+
       ? `🚚 Доставка: ₪${formatMoney(order.deliveryFee)}`
+
       : null,
+
     `💰 ИТОГО: ₪${formatMoney(order.total)}`,
+
     '',
+
     '👤 КЛИЕНТ',
+
     `${order.customer.name}`,
+
     `📞 ${order.customer.phone}`,
+
     order.customer.email ? `✉️ ${order.customer.email}` : null,
+
     '',
+
     order.customer.fulfillment === 'pickup'
+
       ? '🏪 САМОВЫВОЗ'
+
       : '🚚 ДОСТАВКА',
 
+
+
     order.customer.fulfillment === 'pickup'
+
       ? '📍 Shlomo Ibn Gabirol 54, Tel Aviv'
+
       : `📍 ${order.customer.city}, ${order.customer.address}`,
 
+
+
     order.customer.fulfillment === 'delivery'
+
       ? `🚚 Стоимость доставки: ₪${formatMoney(order.deliveryFee)}`
+
       : null,
+
     order.customer.deliveryDate ? `📅 ${order.customer.deliveryDate}` : null,
-    order.customer.deliveryTime ? `🕒 ${order.customer.deliveryTime}` : null,
+
+    order.customer.deliveryTime ? `🕒 ${formatSlotWindow(order.customer.deliveryTime)}` : null,
+
     order.customer.note ? `📝 ${order.customer.note}` : null
+
   ].filter(Boolean).join('\n');
-}
-async function sendTelegram(text) {
-  const token = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
-  const chatId = String(process.env.TELEGRAM_CHAT_ID || '').trim();
-  if (!token || !chatId) return { skipped: true, reason: 'Telegram is not configured' };
-  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    signal: AbortSignal.timeout(10_000),
-    body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true })
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok || body.ok === false) throw new Error(body.description || `Telegram HTTP ${response.status}`);
-  return body;
-}
-function payPlusConfigured() {
-  return Boolean(process.env.PAYPLUS_API_KEY && process.env.PAYPLUS_SECRET_KEY && process.env.PAYPLUS_PAYMENT_PAGE_UID);
-}
-async function createPayPlusPayment(order) {
-  const response = await fetch(`${process.env.PAYPLUS_API_URL || 'https://restapi.payplus.co.il/api/v1.0'}/PaymentPages/generateLink`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'api-key': process.env.PAYPLUS_API_KEY,
-      'secret-key': process.env.PAYPLUS_SECRET_KEY
-    },
-    body: JSON.stringify({
-      payment_page_uid: process.env.PAYPLUS_PAYMENT_PAGE_UID,
-      charge_method: 1,
-      language_code: 'he',
-      amount: order.total,
-      currency_code: 'ILS',
-      sendEmailApproval: true,
-      sendEmailFailure: false,
-      refURL_success: `${PUBLIC_BASE_URL}/payment/success?order=${encodeURIComponent(order.id)}`,
-      refURL_failure: `${PUBLIC_BASE_URL}/payment/failure?order=${encodeURIComponent(order.id)}`,
-      refURL_cancel: `${PUBLIC_BASE_URL}/payment/cancel?order=${encodeURIComponent(order.id)}`,
-      refURL_callback: `${PUBLIC_BASE_URL}/api/payplus/callback`,
-      send_failure_callback: true,
-      more_info: order.id,
-      more_info_1: order.customer.phone,
-      more_info_2: order.customer.name
-    })
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok || !body?.data?.payment_page_link) {
-    throw new Error(body?.results?.description || 'PayPlus не вернул ссылку на оплату');
-  }
-  return { url: body.data.payment_page_link, pageRequestUid: body.data.page_request_uid || '' };
-}
-function verifyPayPlusRequest(req) {
-  if (!process.env.PAYPLUS_SECRET_KEY) return false;
-  const ua = String(req.headers['user-agent'] || '');
-  const hash = String(req.headers.hash || '');
-  if (ua !== 'PayPlus' || !hash) return false;
-  const message = JSON.stringify(req.body || {});
-  const expected = crypto.createHmac('sha256', process.env.PAYPLUS_SECRET_KEY).update(message).digest('base64');
-  const a = Buffer.from(expected);
-  const b = Buffer.from(hash);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
-function getOrderIdFromPayPlus(body = {}) {
-  return cleanText(body.more_info || body?.data?.more_info || body?.transaction?.more_info || body?.transaction?.more_info_1, 100);
+
 }
 
+async function sendTelegram(text) {
+
+  const token = String(process.env.TELEGRAM_BOT_TOKEN || '').trim();
+
+  const chatId = String(process.env.TELEGRAM_CHAT_ID || '').trim();
+
+  if (!token || !chatId) return { skipped: true, reason: 'Telegram is not configured' };
+
+  const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+
+    method: 'POST',
+
+    headers: { 'content-type': 'application/json' },
+
+    signal: AbortSignal.timeout(10_000),
+
+    body: JSON.stringify({ chat_id: chatId, text, disable_web_page_preview: true })
+
+  });
+
+  const body = await response.json().catch(() => ({}));
+
+  if (!response.ok || body.ok === false) throw new Error(body.description || `Telegram HTTP ${response.status}`);
+
+  return body;
+
+}
+
+function payPlusConfigured() {
+
+  return Boolean(process.env.PAYPLUS_API_KEY && process.env.PAYPLUS_SECRET_KEY && process.env.PAYPLUS_PAYMENT_PAGE_UID);
+
+}
+
+async function createPayPlusPayment(order) {
+
+  const response = await fetch(`${process.env.PAYPLUS_API_URL || 'https://restapi.payplus.co.il/api/v1.0'}/PaymentPages/generateLink`, {
+
+    method: 'POST',
+
+    headers: {
+
+      'content-type': 'application/json',
+
+      'api-key': process.env.PAYPLUS_API_KEY,
+
+      'secret-key': process.env.PAYPLUS_SECRET_KEY
+
+    },
+
+    body: JSON.stringify({
+
+      payment_page_uid: process.env.PAYPLUS_PAYMENT_PAGE_UID,
+
+      charge_method: 1,
+
+      language_code: 'he',
+
+      amount: order.total,
+
+      currency_code: 'ILS',
+
+      sendEmailApproval: true,
+
+      sendEmailFailure: false,
+
+      refURL_success: `${PUBLIC_BASE_URL}/payment/success?order=${encodeURIComponent(order.id)}`,
+
+      refURL_failure: `${PUBLIC_BASE_URL}/payment/failure?order=${encodeURIComponent(order.id)}`,
+
+      refURL_cancel: `${PUBLIC_BASE_URL}/payment/cancel?order=${encodeURIComponent(order.id)}`,
+
+      refURL_callback: `${PUBLIC_BASE_URL}/api/payplus/callback`,
+
+      send_failure_callback: true,
+
+      more_info: order.id,
+
+      more_info_1: order.customer.phone,
+
+      more_info_2: order.customer.name
+
+    })
+
+  });
+
+  const body = await response.json().catch(() => ({}));
+
+  if (!response.ok || !body?.data?.payment_page_link) {
+
+    throw new Error(body?.results?.description || 'PayPlus не вернул ссылку на оплату');
+
+  }
+
+  return { url: body.data.payment_page_link, pageRequestUid: body.data.page_request_uid || '' };
+
+}
+
+function verifyPayPlusRequest(req) {
+
+  if (!process.env.PAYPLUS_SECRET_KEY) return false;
+
+  const ua = String(req.headers['user-agent'] || '');
+
+  const hash = String(req.headers.hash || '');
+
+  if (ua !== 'PayPlus' || !hash) return false;
+
+  const message = JSON.stringify(req.body || {});
+
+  const expected = crypto.createHmac('sha256', process.env.PAYPLUS_SECRET_KEY).update(message).digest('base64');
+
+  const a = Buffer.from(expected);
+
+  const b = Buffer.from(hash);
+
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+
+}
+
+function getOrderIdFromPayPlus(body = {}) {
+
+  return cleanText(body.more_info || body?.data?.more_info || body?.transaction?.more_info || body?.transaction?.more_info_1, 100);
+
+}
+
+
+
 app.get('/api/products', async (req, res) => {
+
   const force = req.query.refresh === '1';
+
   const catalog = await getCatalog({ force });
+
   res.set('Cache-Control', 'no-store');
+
   res.json({ ok: true, products: catalog.products, source: catalog.source, synced: String(catalog.source).startsWith('google-csv') });
+
+});
+
+
+
+app.get('/api/schedule', async (req, res) => {
+  try {
+    const fulfillment =
+      req.query.fulfillment === 'pickup'
+        ? 'pickup'
+        : 'delivery';
+
+    const schedule =
+      await buildSchedule(fulfillment);
+
+    res.set('Cache-Control', 'no-store');
+
+    res.json({
+      ok: true,
+      fulfillment,
+      preparationMinutes: PREPARATION_MINUTES,
+      storeOpen: minutesToTime(STORE_OPEN_MINUTES),
+      storeClose: minutesToTime(STORE_CLOSE_MINUTES),
+      slotMinutes: SLOT_MINUTES,
+      deliverySlotCapacity: DELIVERY_SLOT_CAPACITY,
+      ...schedule
+    });
+  } catch (error) {
+    console.error('Schedule error:', error);
+    res.status(500).json({
+      ok: false,
+      error: 'Не удалось загрузить доступное время'
+    });
+  }
 });
 
 app.get('/api/config', (_req, res) => {
+
   res.json({
+
     paymentMode: DEMO_PAYMENT ? 'demo' : 'payplus',
-    deliveryFee: DELIVERY_FEE,
+
+    deliveryFees: DELIVERY_FEES,
+    defaultDeliveryFee: DEFAULT_DELIVERY_FEE,
+    preparationMinutes: PREPARATION_MINUTES,
+    storeOpen: minutesToTime(STORE_OPEN_MINUTES),
+    storeClose: minutesToTime(STORE_CLOSE_MINUTES),
+    slotMinutes: SLOT_MINUTES,
+    deliverySlotCapacity: DELIVERY_SLOT_CAPACITY,
+
     pickupAddress: 'Shlomo Ibn Gabirol 54, Tel Aviv',
+
     telegramConfigured: Boolean(
+
       process.env.TELEGRAM_BOT_TOKEN &&
+
       process.env.TELEGRAM_CHAT_ID
+
     )
+
   });
+
 });
 
+
+
 app.post('/api/checkout', async (req, res) => {
+
   try {
+
     const { items, total: productsTotal } = await normalizeCart(req.body.cart);
+
     const customer = normalizeCustomer(req.body.customer);
 
+    await validateOrderSlot(customer);
+
+
+
     const deliveryFee =
+
       customer.fulfillment === 'delivery'
-        ? DELIVERY_FEE
+
+        ? getDeliveryFee(customer.city)
+
         : 0;
+
+
 
     const total = productsTotal + deliveryFee;
 
+
+
     const rawLanguage = String(req.body.language || '').toLowerCase();
 
-    const language = ['he', 'en', 'ru'].includes(rawLanguage)
+
+
+    const language = ['he', 'en', 'ru', 'uk', 'fr'].includes(rawLanguage)
+
       ? rawLanguage
+
       : 'he';
 
 
 
+
+
+
+
     const order = {
+
       id: newOrderId(),
+
       items,
+
       productsTotal,
+
       deliveryFee,
+
       total,
+
       customer,
+
+      language,
+
       status: 'awaiting_payment',
+
       createdAt: new Date().toISOString(),
+
       updatedAt: new Date().toISOString()
+
     };
+
     await saveOrder(order);
 
-    // Send a useful pending notification too; a second message is sent after confirmed payment.
+
+
+
     sendTelegram(formatOrderMessage(order, '🕒 НОВЫЙ ЗАКАЗ — ожидает оплату'))
+
       .then(result => { if (!result?.skipped) console.log(`Telegram: order ${order.id} sent`); })
+
       .catch(error => console.error('Telegram order notification failed:', error.message));
 
+
+
     if (DEMO_PAYMENT) {
+
       return res.json({ ok: true, orderId: order.id, paymentUrl: `${PUBLIC_BASE_URL}/demo-payment?order=${encodeURIComponent(order.id)}` });
+
     }
+
     if (!payPlusConfigured()) {
+
       await updateOrder(order.id, { status: 'payment_configuration_error' });
+
       return res.status(503).json({ ok: false, error: 'Оплата ещё не подключена: добавьте PayPlus credentials в .env' });
+
     }
+
     const payment = await createPayPlusPayment(order);
+
     await updateOrder(order.id, { payPlusPageRequestUid: payment.pageRequestUid });
+
     res.json({ ok: true, orderId: order.id, paymentUrl: payment.url });
+
   } catch (error) {
+
     console.error(error);
+
     res.status(400).json({ ok: false, error: error.message || 'Не удалось оформить заказ' });
+
   }
+
 });
+
+
 
 app.post('/api/payplus/callback', async (req, res) => {
+
   try {
+
     if (!verifyPayPlusRequest(req)) return res.status(401).json({ ok: false });
+
     const orderId = getOrderIdFromPayPlus(req.body);
+
     if (!orderId) return res.status(400).json({ ok: false, error: 'Missing order id' });
 
-    // PayPlus sends successful callbacks automatically when refURL_callback is configured.
-    // If send_failure_callback=true, failures can arrive too, so reject known failure markers.
+
+
+
+
     const raw = JSON.stringify(req.body).toLowerCase();
+
     const looksFailed = /"status"\s*:\s*"?(failed|failure|declined|cancel)/.test(raw) || /"status_code"\s*:\s*"?[1-9]/.test(raw);
+
     const order = await updateOrder(orderId, { status: looksFailed ? 'payment_failed' : 'paid', paymentCallback: req.body });
+
     if (order && !looksFailed) await sendTelegram(formatOrderMessage(order, '✅ ЗАКАЗ ОПЛАЧЕН'));
+
     res.json({ ok: true });
+
   } catch (error) {
+
     console.error(error);
+
     res.status(500).json({ ok: false });
+
   }
+
 });
 
+
+
 app.get('/payment/success', (req, res) => res.redirect(`/?payment=success&order=${encodeURIComponent(cleanText(req.query.order, 100))}`));
+
 app.get('/payment/failure', (req, res) => res.redirect(`/?payment=failure&order=${encodeURIComponent(cleanText(req.query.order, 100))}`));
+
 app.get('/payment/cancel', (req, res) => res.redirect(`/?payment=cancel&order=${encodeURIComponent(cleanText(req.query.order, 100))}`));
 
+
+
 app.get('/demo-payment', async (req, res) => {
+
   if (!DEMO_PAYMENT) return res.status(404).send('Not found');
 
+
+
   const orderId = cleanText(req.query.order, 100);
+
   const orders = await readOrders();
+
   const order = orders.find(o => o.id === orderId);
+
+
 
   if (!order) return res.status(404).send('Order not found');
 
+
+
   const rawLang = String(order.language || '').toLowerCase();
 
-  const lang = ['he', 'en', 'ru'].includes(rawLang)
+
+
+  const lang = ['he', 'en', 'ru', 'fr'].includes(rawLang)
+
     ? rawLang
+
     : 'he';
 
+
+
   const translations = {
+
     he: {
+
       demo: 'מצב הדגמה · הכרטיס אינו מחויב',
+
       payment: 'תשלום',
+
       order: 'הזמנה',
+
       button: 'הדמיית תשלום מוצלח'
+
     },
+
+
 
     en: {
+
       demo: 'DEMO MODE · card will not be charged',
+
       payment: 'Payment',
+
       order: 'Order',
+
       button: 'Simulate successful payment'
+
     },
 
+
+
     ru: {
+
       demo: 'DEMO MODE · карта не списывается',
+
       payment: 'Оплата',
+
       order: 'Заказ',
+
       button: 'Имитировать успешную оплату'
+
     }
+
   };
 
+
+
   const t = translations[lang];
+
   const dir = lang === 'he' ? 'rtl' : 'ltr';
 
+
+
   res.type('html').send(`
+
     <!doctype html>
+
     <html lang="${lang}" dir="${dir}">
+
       <head>
+
         <meta charset="utf-8">
+
         <meta name="viewport" content="width=device-width,initial-scale=1">
+
         <title>${t.payment}</title>
 
+
+
         <style>
+
           body{
+
             font-family:system-ui;
+
             background:#f7f1ec;
+
             color:#29231f;
+
             display:grid;
+
             place-items:center;
+
             min-height:100vh;
+
             margin:0;
+
           }
+
+
 
           .box{
+
             width:min(420px,90vw);
+
             background:white;
+
             padding:32px;
+
             border-radius:28px;
+
             box-shadow:0 20px 60px #0001;
+
           }
+
+
 
           button{
+
             width:100%;
+
             padding:15px;
+
             border:0;
+
             border-radius:999px;
+
             background:#29231f;
+
             color:white;
+
             font-weight:700;
+
             cursor:pointer;
+
           }
+
+
 
           small{
+
             opacity:.6;
+
           }
+
         </style>
+
       </head>
 
+
+
       <body>
+
         <div class="box">
+
           <small>${t.demo}</small>
+
           <h1>${t.payment} ₪${order.total}</h1>
+
           <p>${t.order} ${order.id}</p>
 
+
+
           <form method="post" action="/api/demo-payment/confirm">
+
             <input type="hidden" name="order" value="${order.id}">
+
             <button>${t.button}</button>
+
           </form>
+
         </div>
+
       </body>
+
     </html>
+
   `);
+
 });
+
 app.post('/api/demo-payment/confirm', async (req, res) => {
+
   if (!DEMO_PAYMENT) return res.status(404).send('Not found');
+
   const orderId = cleanText(req.body.order, 100);
+
   const order = await updateOrder(orderId, { status: 'paid', paymentProvider: 'demo' });
+
   if (order) await sendTelegram(formatOrderMessage(order, '✅ DEMO: ЗАКАЗ ОПЛАЧЕН')).catch(error => console.error('Telegram paid notification failed:', error.message));
+
   res.redirect(`/?payment=success&order=${encodeURIComponent(orderId)}`);
+
 });
+
+
 
 app.post('/api/contact', async (req, res) => {
+
   try {
+
     const name = cleanText(req.body.name, 100);
+
     const phone = cleanText(req.body.phone, 30);
+
     const message = cleanText(req.body.message, 800);
+
     if (name.length < 2 || !isValidPhone(phone)) throw new Error('Проверьте имя и телефон');
+
     await sendTelegram(`💌 Заявка с сайта TATI Flowers\nИмя: ${name}\nТелефон: ${phone}\n${message ? `Сообщение: ${message}` : ''}`);
+
     res.json({ ok: true });
+
   } catch (error) {
+
     res.status(400).json({ ok: false, error: error.message || 'Не удалось отправить заявку' });
+
   }
+
 });
 
+
+
 app.post('/admin/orders/:id/status', adminAuth, async (req, res) => {
+
   try {
+
     const orderId = cleanText(req.params.id, 100);
+
     const status = cleanText(req.body.status, 40);
 
+
+
     const allowedStatuses = [
+
       'awaiting_payment',
+
       'paid',
+
       'preparing',
+
       'ready',
+
       'delivered',
+
       'cancelled'
+
     ];
 
+
+
     if (!allowedStatuses.includes(status)) {
+
       return res.status(400).send('Invalid status');
+
     }
+
+
 
     const order = await updateOrder(orderId, { status });
 
+
+
     if (!order) {
+
       return res.status(404).send('Order not found');
+
     }
 
+
+
     res.redirect('/admin');
+
   } catch (error) {
+
     console.error('Admin status update error:', error);
+
     res.status(500).send('Не удалось изменить статус');
+
   }
+
 });
 
+
+
 app.get('/admin', adminAuth, async (req, res) => {
+
   try {
+
     const orders = await readOrders();
 
+
+
     res.set('Cache-Control', 'no-store');
+
     res.set('X-Robots-Tag', 'noindex, nofollow');
 
+
+
     const rows = orders.map(order => {
+
       const customer = order.customer || {};
+
       const items = Array.isArray(order.items) ? order.items : [];
 
+
+
       const itemsHtml = items.map(item => `
+
         <div class="item">
+
           <strong>${escapeHtml(item.name)}</strong>
+
           <span>
+
             ${escapeHtml(item.quantity)} × ₪${escapeHtml(item.price)}
+
             = ₪${escapeHtml(item.lineTotal)}
+
           </span>
+
         </div>
+
       `).join('');
 
+
+
       return `
+
         <article class="order">
+
           <div class="order-head">
+
             <div>
+
               <strong>${escapeHtml(order.id)}</strong>
+
               <div class="muted">${escapeHtml(formatAdminDate(order.createdAt))}</div>
+
             </div>
+
+
 
             <div class="total">
+
               ₪${escapeHtml(order.total)}
+
             </div>
+
           </div>
+
+
 
           <div class="status status-${escapeHtml(order.status)}">
+
             ${escapeHtml(orderStatusLabel(order.status))}
+
           </div>
+
+
 
           <form
+
   class="status-form"
+
   method="post"
+
   action="/admin/orders/${encodeURIComponent(order.id)}/status"
+
 >
+
   <button name="status" value="paid">Оплачен</button>
+
   <button name="status" value="preparing">В работе</button>
+
   <button name="status" value="ready">Готов</button>
+
   <button name="status" value="delivered">Доставлен</button>
+
   <button name="status" value="cancelled">Отменён</button>
+
 </form>
 
+
+
           <div class="grid">
+
             <div>
+
               <span class="label">Клиент</span>
+
               <strong>${escapeHtml(customer.name)}</strong>
+
             </div>
 
+
+
             <div>
+
               <span class="label">Телефон</span>
+
               <a href="tel:${escapeHtml(customer.phone)}">
+
                 ${escapeHtml(customer.phone)}
+
               </a>
+
             </div>
 
+
+
             <div>
+
               <span class="label">Город</span>
+
               ${escapeHtml(customer.city)}
+
             </div>
 
+
+
             <div>
+
               <span class="label">Дата доставки</span>
+
               ${escapeHtml(customer.deliveryDate || '—')}
+
             </div>
 
+
+
             <div>
+
               <span class="label">Язык</span>
+
               ${escapeHtml(order.language || '—')}
+
             </div>
 
+
+
             <div>
+
               <span class="label">Оплата</span>
+
               ${escapeHtml(order.paymentProvider || '—')}
+
             </div>
+
           </div>
 
+
+
           <details>
+
             <summary>Подробнее</summary>
 
+
+
             <div class="details">
+
               <h3>Состав заказа</h3>
+
+
 
               ${itemsHtml || '<p>Нет товаров</p>'}
 
+
+
               <h3>Доставка</h3>
 
-              <p>
-                ${escapeHtml(customer.city)},
-                ${escapeHtml(customer.address)}
-              </p>
+
 
               <p>
-                Время:
-                ${escapeHtml(customer.deliveryTime || '—')}
+
+                ${escapeHtml(customer.city)},
+
+                ${escapeHtml(customer.address)}
+
               </p>
+
+
+
+              <p>
+
+                Время:
+
+                ${escapeHtml(customer.deliveryTime ? formatSlotWindow(customer.deliveryTime) : '—')}
+
+              </p>
+
+
 
               ${customer.email
+
           ? `<p>Email: ${escapeHtml(customer.email)}</p>`
+
           : ''
+
         }
+
+
 
               ${customer.note
+
           ? `<p>Комментарий: ${escapeHtml(customer.note)}</p>`
+
           : ''
+
         }
+
             </div>
+
           </details>
+
         </article>
+
       `;
+
     }).join('');
 
+
+
     res.type('html').send(`
+
       <!doctype html>
 
+
+
       <html lang="ru">
+
         <head>
+
           <meta charset="utf-8">
 
+
+
           <meta
+
             name="viewport"
+
             content="width=device-width, initial-scale=1"
+
           >
+
+
 
           <meta name="robots" content="noindex,nofollow">
 
+
+
           <title>TATI Flowers — Заказы</title>
 
+
+
           <style>
-            * {
+
+
               box-sizing: border-box;
+
             }
+
+
 
             body {
+
               margin: 0;
+
               background: #f6f1ed;
+
               color: #29231f;
+
               font-family: Arial, sans-serif;
+
             }
+
+
 
             main {
+
               width: min(1000px, calc(100% - 32px));
+
               margin: 40px auto;
+
             }
+
+
 
             h1 {
+
               margin-bottom: 8px;
+
             }
+
+
 
             .subtitle {
+
               margin-bottom: 30px;
+
               opacity: .6;
+
             }
+
+
 
             .order {
+
               background: white;
+
               border-radius: 22px;
+
               padding: 22px;
+
               margin-bottom: 18px;
+
               box-shadow: 0 10px 35px rgba(0,0,0,.05);
+
             }
+
+
 
             .order-head {
+
               display: flex;
+
               align-items: center;
+
               justify-content: space-between;
+
               gap: 20px;
+
             }
+
+
 
             .total {
+
               font-size: 22px;
+
               font-weight: 700;
+
             }
+
+
 
             .muted {
+
               margin-top: 5px;
+
               font-size: 13px;
+
               opacity: .5;
+
             }
+
+
 
             .status {
+
               display: inline-block;
+
               margin: 15px 0;
+
               padding: 7px 12px;
+
               border-radius: 100px;
+
               background: #f1e3df;
+
               font-size: 12px;
+
               font-weight: 700;
+
             }
+
+
 
             .status-paid {
+
   background: #e7f5ea;
+
 }
+
+
 
 .status-awaiting_payment {
+
   background: #f6eadf;
+
 }
+
+
 
 .status-payment_failed,
+
 .status-payment_configuration_error {
+
   background: #f8dddd;
+
 }
+
+
 
 .status-form {
+
   display: flex;
+
   flex-wrap: wrap;
+
   gap: 7px;
+
   margin: 0 0 20px;
+
 }
+
+
 
 .status-form button {
+
   border: 1px solid #e5ddd7;
+
   background: white;
+
   color: #29231f;
+
   padding: 8px 12px;
+
   border-radius: 999px;
+
   font-size: 11px;
+
   cursor: pointer;
+
   transition: .2s ease;
+
 }
+
+
 
 .status-form button:hover {
+
   background: #f4e7e4;
+
   transform: translateY(-1px);
+
 }
+
+
 
 .status-preparing {
+
   background: #fff1cc;
+
 }
+
+
 
 .status-ready {
+
   background: #e3edf8;
+
 }
+
+
 
 .status-delivered {
+
   background: #e3f3e7;
+
 }
+
+
 
 .status-cancelled {
+
   background: #eee;
+
 }
+
+
 
             .grid {
+
               display: grid;
+
               grid-template-columns: repeat(3, 1fr);
+
               gap: 18px;
+
               margin: 15px 0 20px;
+
             }
+
+
 
             .label {
+
               display: block;
+
               margin-bottom: 5px;
+
               font-size: 11px;
+
               text-transform: uppercase;
+
               opacity: .5;
+
             }
+
+
 
             a {
+
               color: inherit;
+
             }
+
+
 
             details {
+
               border-top: 1px solid #eee;
+
               padding-top: 15px;
+
             }
 
+
+
             summary {
+
               cursor: pointer;
+
               font-weight: 700;
+
             }
 
+
+
             summary {
+
   cursor: pointer;
+
   font-weight: 700;
+
   list-style: none;
+
   outline: none;
+
 }
+
+
 
 summary::-webkit-details-marker {
+
   display: none;
+
 }
+
+
 
 summary:focus,
+
 summary:focus-visible {
+
   outline: none;
+
   box-shadow: none;
+
 }
+
+
 
 summary::before {
+
   content: '›';
+
   display: inline-block;
+
   margin-right: 8px;
+
   transition: transform .2s ease;
+
 }
+
+
 
 details[open] summary::before {
+
   transform: rotate(90deg);
+
 }
 
+
+
             .details {
+
               margin-top: 18px;
+
             }
+
+
 
             .item {
+
               display: flex;
+
               justify-content: space-between;
+
               gap: 15px;
+
               padding: 8px 0;
+
               border-bottom: 1px solid #eee;
+
             }
+
+
 
             @media (max-width: 700px) {
+
               main {
+
                 margin-top: 20px;
+
               }
 
+
+
               .grid {
+
                 grid-template-columns: 1fr 1fr;
+
               }
+
+
 
               .order-head {
+
                 align-items: flex-start;
+
               }
+
             }
+
+
 
             @media (max-width: 450px) {
+
               .grid {
+
                 grid-template-columns: 1fr;
+
               }
+
+
 
               .order {
+
                 padding: 18px;
+
               }
+
             }
+
           </style>
+
         </head>
 
+
+
         <body>
+
           <main>
+
             <h1>TATI Flowers</h1>
 
+
+
             <div class="subtitle">
+
               Заказы: ${orders.length}
+
             </div>
 
+
+
             ${rows || '<p>Пока нет заказов.</p>'}
+
           </main>
+
         </body>
+
       </html>
+
     `);
 
+
+
   } catch (error) {
+
     console.error('Admin orders error:', error);
 
+
+
     res.status(500).send('Не удалось загрузить заказы');
+
+  }
+
+});
+
+const SITE_LANGUAGES = ['he', 'en', 'ru', 'uk', 'fr'];
+
+const SITE_META = {
+  he: {
+    title: 'TATI Flowers | זרי פרחים ומשלוחים בישראל',
+    description: 'TATI Flowers — זרי פרחים בעיצוב אישי, סידורי פרחים ומשלוחי פרחים בתל אביב ובמרכז הארץ.'
+  },
+  en: {
+    title: 'TATI Flowers | Bouquets & Flower Delivery in Israel',
+    description: 'Handcrafted bouquets and flower delivery in Tel Aviv and Central Israel. Order online from Israel or abroad.'
+  },
+  ru: {
+    title: 'TATI Flowers | Букеты и доставка цветов в Израиле',
+    description: 'Авторские букеты и доставка цветов по Тель-Авиву и Центральному Израилю. Заказ онлайн из Израиля и из-за границы.'
+  },
+  uk: {
+    title: 'TATI Flowers | Букети та доставка квітів в Ізраїлі',
+    description: 'Авторські букети та доставка квітів по Тель-Авіву та Центральному Ізраїлю. Онлайн-замовлення з Ізраїлю та з-за кордону.'
+  },
+  fr: {
+    title: 'TATI Flowers | Bouquets et livraison de fleurs en Israël',
+    description: 'Bouquets artisanaux et livraison de fleurs à Tel Aviv et dans le centre d’Israël. Commandez en ligne depuis Israël ou l’étranger.'
+  }
+};
+
+async function sendLocalizedIndex(
+  res,
+  lang
+) {
+  const meta =
+    SITE_META[lang] ||
+    SITE_META.he;
+
+  const dir =
+    lang === 'he'
+      ? 'rtl'
+      : 'ltr';
+
+  const localizedUrl =
+    `${PUBLIC_BASE_URL}/${lang}/`;
+
+  let page =
+    await fs.readFile(
+      path.join(
+        __dirname,
+        'public',
+        'index.html'
+      ),
+      'utf8'
+    );
+
+  page = page
+    .replace(
+      /<html\s+lang="[^"]+"\s+dir="[^"]+">/i,
+      `<html lang="${lang}" dir="${dir}">`
+    )
+    .replace(
+      /<title>[\s\S]*?<\/title>/i,
+      `<title>${escapeHtml(meta.title)}</title>`
+    )
+    .replace(
+      /<meta\s+name="description"\s+content="[^"]*"\s*\/?>/i,
+      `<meta name="description" content="${escapeHtml(meta.description)}">`
+    )
+    .replace(
+      /<link\s+rel="canonical"\s+href="[^"]*"\s*\/?>/i,
+      `<link rel="canonical" href="${localizedUrl}">`
+    )
+    .replace(
+      /<meta\s+property="og:title"\s+content="[^"]*"\s*\/?>/i,
+      `<meta property="og:title" content="${escapeHtml(meta.title)}">`
+    )
+    .replace(
+      /<meta\s+property="og:description"\s+content="[^"]*"\s*\/?>/i,
+      `<meta property="og:description" content="${escapeHtml(meta.description)}">`
+    )
+    .replace(
+      /<meta\s+property="og:url"\s+content="[^"]*"\s*\/?>/i,
+      `<meta property="og:url" content="${localizedUrl}">`
+    );
+
+  res.type('html').send(page);
+}
+
+app.get('/', (_req, res) => {
+  res.redirect(302, '/he/');
+});
+
+app.get('/:lang/', async (req, res, next) => {
+  const lang =
+    String(req.params.lang || '')
+      .toLowerCase();
+
+  if (!SITE_LANGUAGES.includes(lang)) {
+    return next();
+  }
+
+  try {
+    await sendLocalizedIndex(
+      res,
+      lang
+    );
+  } catch (error) {
+    console.error('Localized page error:', error);
+    res.status(500).send('Page unavailable');
   }
 });
 
-app.get('*splat', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('*splat', (_req, res) => {
+  res.redirect(302, '/he/');
+});
+
 
 async function startServer() {
+
   try {
+
     await initDatabase();
 
+
+
     app.listen(PORT, () => {
+
       console.log(`TATI Flowers: ${PUBLIC_BASE_URL}`);
+
     });
+
   } catch (error) {
+
     console.error('Database initialization failed:', error);
+
     process.exit(1);
+
   }
+
 }
+
+
 
 startServer();
