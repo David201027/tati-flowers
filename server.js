@@ -54,7 +54,9 @@ function sanitizeProduct(row = {}) {
   const name = cleanText(row.name ?? row.Name ?? row['Название'], 120);
   const rawPrice = String(row.price ?? row.Price ?? row['Цена'] ?? '').replace(/\s/g, '').replace(',', '.').replace(/[^0-9.]/g, '');
   const price = Number(rawPrice);
+
   if (!id || !name || !Number.isFinite(price) || price <= 0) return null;
+
 
   const activeValue = row['is-active'] ?? row.active ?? row['Активен'];
   const imageValue = row.photo ?? row.image ?? row['Фото URL'];
@@ -68,6 +70,9 @@ function sanitizeProduct(row = {}) {
     nameEn: cleanText(row['name-en'] ?? row.name_en, 120),
     nameRu: cleanText(row['name-ru'] ?? row.name_ru ?? row['Название RU'], 120),
     price: Math.round(price * 100) / 100,
+    priceS: Number(row['price-s']) || null,
+    priceM: Number(row['price-m']) || null,
+    priceL: Number(row['price-l']) || null,
     category: cleanText(row.category ?? row.Category ?? row['Категория'] ?? 'everyday', 40).toLowerCase() || 'everyday',
     description: cleanText(row.description ?? row.Description ?? row['Описание'], 260),
     descriptionHe: cleanText(row['description-he'] ?? row.description_he ?? row['תיאור'], 260),
