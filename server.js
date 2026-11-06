@@ -36,25 +36,25 @@ const { Pool } = pg;
 
 const DELIVERY_FEES = {
   'tel aviv': 30,
-  'tel aviv-yafo': 30,
+  'tel aviv-yafo': 50,
   'תל אביב': 30,
-  'תל אביב-יפו': 30,
-  'holon': 40,
-  'חולון': 40,
-  'bat yam': 40,
-  'בת ים': 40,
-  'ramat gan': 40,
-  'רמת גן': 40,
-  'givatayim': 40,
-  'גבעתיים': 40,
-  'bnei brak': 45,
-  'בני ברק': 45,
-  'rishon lezion': 50,
-  'ראשון לציון': 50,
-  'petah tikva': 50,
-  'פתח תקווה': 50,
-  'herzliya': 60,
-  'הרצליה': 60
+  'תל אביב-יפו': 50,
+  'holon': 60,
+  'חולון': 60,
+  'bat yam': 60,
+  'בת ים': 60,
+  'ramat gan': 55,
+  'רמת גן': 55,
+  'givatayim': 50,
+  'גבעתיים': 50,
+  'bnei brak': 55,
+  'בני ברק': 55,
+  'rishon lezion': 70,
+  'ראשון לציון': 70,
+  'petah tikva': 70,
+  'פתח תקווה': 70,
+  'herzliya': 70,
+  'הרצליה': 70
 };
 
 const DEFAULT_DELIVERY_FEE = 60;
