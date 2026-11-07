@@ -67,6 +67,13 @@ const DELIVERY_SLOT_CAPACITY = Math.max(1, Number(process.env.DELIVERY_SLOT_CAPA
 const BOOKABLE_DAYS_AHEAD = 30;
 const DELIVERY_HOLD_MINUTES = 20;
 
+function isSaturday(dateString) {
+  const date =
+    new Date(`${dateString}T12:00:00Z`);
+
+  return date.getUTCDay() === 6;
+}
+
 
 
 const pool = process.env.DATABASE_URL
@@ -686,6 +693,20 @@ function workingMinutesUntil(
     const isTargetDay =
       date === targetDate;
 
+    if (isSaturday(date)) {
+      if (isTargetDay) {
+        return 0;
+      }
+
+      date =
+        addDaysToDateString(
+          date,
+          1
+        );
+
+      continue;
+    }
+
     const start =
       isToday
         ? Math.max(
@@ -793,6 +814,10 @@ async function buildSchedule(
         now.date,
         offset
       );
+
+    if (isSaturday(date)) {
+      continue;
+    }
 
     const slots = [];
 

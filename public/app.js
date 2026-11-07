@@ -282,7 +282,8 @@ const I18N = {
 
     availabilityNote: 'הרכב הזר עשוי להשתנות מעט בהתאם לזמינות העונתית של הפרחים. במידת הצורך, פרחים מסוימים יוחלפו באפשרויות דומות ככל האפשר בסגנון, בצבע ובערך.',
 
-    seoInternationalText: 'מזמינים מחו״ל? אפשר לבצע הזמנה אונליין מכל מקום בעולם, ואנחנו נדאג למסור את הפרחים ליקרים לכם בישראל.',
+    seoInternationalText: 'מזמינים מחו״ל? אפשר לבצע הזמנה אונליין מכל מקום בעולם, ואנחנו נדאג להכין ולמסור פרחים טריים ליקרים לכם בתל אביב ובמרכז הארץ.',
+    seoInternationalExtra: 'בחרו זר, הוסיפו ברכה אישית ושלמו בצורה מאובטחת בכרטיס — אנחנו נדאג להכנה ולמשלוח המקומי בישראל.',
 
     deliveryTimingTitle: 'זמן קבלת ההזמנה',
 
@@ -576,7 +577,8 @@ const I18N = {
     seoHowText: 'We will prepare your order and make sure the flowers arrive beautifully and carefully arranged.',
 
     availabilityNote: 'The exact flower selection may vary depending on seasonal availability. If needed, individual flowers will be replaced with the closest available alternatives in style, color and value.',
-    seoInternationalText: 'Ordering from abroad? You can place your order online from anywhere in the world, and we will deliver the flowers to your loved ones in Israel.',
+    seoInternationalText: 'Ordering flowers for someone in Israel from abroad? Whether you are in New York, Miami, Los Angeles, London, Toronto or anywhere else in the world, you can order online and we will prepare and deliver fresh flowers to your loved ones in Tel Aviv and Central Israel.',
+    seoInternationalExtra: 'Choose a bouquet, add a personal message and pay securely online with your card — we will take care of the flowers and local delivery in Israel.',
 
     deliveryTimingTitle: 'Order time',
 
@@ -871,7 +873,8 @@ const I18N = {
 
     availabilityNote: 'Состав букета может незначительно отличаться в зависимости от сезонного наличия цветов. При необходимости отдельные позиции будут заменены на максимально близкие по стилю, цвету и стоимости.',
 
-    seoInternationalText: 'Заказать цветы можно и из-за границы — оформите заказ онлайн, а мы доставим его вашим близким в Израиле.',
+    seoInternationalText: 'Заказываете цветы для близких в Израиле из-за границы? Оформите заказ онлайн из любой страны, а мы подготовим свежий букет и доставим его в Тель-Авиве и Центральном Израиле.',
+    seoInternationalExtra: 'Выберите букет, добавьте личное пожелание и безопасно оплатите заказ картой онлайн — подготовку и местную доставку в Израиле мы возьмём на себя.',
 
     deliveryTimingTitle: 'Время получения заказа',
 
@@ -1038,7 +1041,8 @@ const I18N = {
     seoHowText: 'Ми підготуємо замовлення та подбаємо про те, щоб квіти приїхали красивими й акуратно оформленими.',
 
     availabilityNote: 'Склад букета може незначно відрізнятися залежно від сезонної наявності квітів. За потреби окремі позиції будуть замінені на максимально близькі за стилем, кольором і вартістю.',
-    seoInternationalText: 'Замовити квіти можна і з-за кордону — оформіть замовлення онлайн, а ми доставимо його вашим близьким в Ізраїлі.',
+    seoInternationalText: 'Замовляєте квіти для близьких в Ізраїлі з-за кордону? Оформіть замовлення онлайн з будь-якої країни, а ми підготуємо свіжий букет і доставимо його в Тель-Авіві та Центральному Ізраїлі.',
+    seoInternationalExtra: 'Оберіть букет, додайте особисте побажання та безпечно оплатіть замовлення карткою онлайн — підготовку й місцеву доставку в Ізраїлі ми візьмемо на себе.',
 
     deliveryTimingTitle: 'Час отримання замовлення',
 
@@ -1336,7 +1340,8 @@ const I18N = {
 
     availabilityNote: 'La composition exacte du bouquet peut légèrement varier selon la disponibilité saisonnière des fleurs. Si nécessaire, certaines fleurs seront remplacées par des alternatives aussi proches que possible en style, couleur et valeur.',
 
-    seoInternationalText: 'Vous commandez depuis l’étranger ? Passez votre commande en ligne où que vous soyez dans le monde, et nous livrerons les fleurs à vos proches en Israël.',
+    seoInternationalText: 'Vous souhaitez envoyer des fleurs à un proche en Israël depuis la France ? Que vous soyez à Paris, Marseille, Lyon, Toulouse ou ailleurs, vous pouvez commander votre bouquet en ligne et nous le livrerons à vos proches à Tel-Aviv et dans le centre d’Israël.',
+    seoInternationalExtra: 'Choisissez un bouquet, ajoutez votre message personnel et payez en ligne de façon sécurisée par carte — nous nous occupons de la préparation et de la livraison locale en Israël.',
 
     deliveryTimingTitle: 'Heure de réception',
 

@@ -4547,3 +4547,16 @@ html[dir="rtl"] #productModalPrice {
     transform: none !important;
   }
 }
+
+
+.seo-international,
+.seo-international-extra {
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.seo-international-extra {
+  margin-top: 10px;
+  opacity: .72;
+}
