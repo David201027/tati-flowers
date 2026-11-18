@@ -159,7 +159,7 @@ const I18N = {
     bouquetCategory: 'זרים',
     monoCategory: 'זרים מפרח אחד',
     pottedCategory: 'עציצים',
-    homeCategory: 'עיצוב ומתנות לבית',
+    homeCategory: 'אגרטלים וכלי שתילה',
 
     everyday: 'ליום-יום',
 
@@ -456,8 +456,7 @@ const I18N = {
     bouquetCategory: 'Bouquets',
     monoCategory: 'Mono Bouquets',
     pottedCategory: 'Potted Plants',
-    homeCategory: 'Home & Decor',
-
+    homeCategory: 'Vases & Planters',
     everyday: 'Everyday',
 
     love: 'Love',
@@ -751,7 +750,7 @@ const I18N = {
     bouquetCategory: 'Букеты',
     monoCategory: 'Монобукеты',
     pottedCategory: 'Вазоны',
-    homeCategory: 'Для дома и декора',
+    homeCategory: 'Вазы и кашпо',
 
     everyday: 'На каждый день',
 
@@ -970,7 +969,7 @@ const I18N = {
     bouquetCategory: 'Букети',
     monoCategory: 'Монобукети',
     pottedCategory: 'Рослини в горщиках',
-    homeCategory: 'Для дому та декору',
+    homeCategory: 'Вази та кашпо',
     everyday: 'На кожен день',
     love: 'Кохання',
     event: 'Події',
@@ -1217,7 +1216,7 @@ const I18N = {
     bouquetCategory: 'Bouquets',
     monoCategory: 'Mono-bouquets',
     pottedCategory: 'Plantes en pot',
-    homeCategory: 'Maison & décoration',
+    homeCategory: 'Vases & cache-pots',
 
     everyday: 'Tous les jours',
 
